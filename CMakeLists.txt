@@ -116,3 +116,15 @@ add_executable(test_system_connect tests/test_system_connect.cpp)
 target_link_libraries(test_system_connect PRIVATE analysis_lib)
 target_include_directories(test_system_connect PRIVATE tests)
 add_test(NAME test_system_connect COMMAND test_system_connect)
+
+# --- Visualizer executable ---
+find_package(OpenGL REQUIRED)
+add_executable(visualizer src/visualizer.cpp)
+target_link_libraries(visualizer PRIVATE
+    analysis_lib
+    imgui
+    implot
+    glad
+    glfw
+    OpenGL::GL
+)
