@@ -77,6 +77,7 @@ add_library(analysis_lib STATIC
     src/analysis/model_library.cpp
     src/analysis/system_properties.cpp
     src/analysis/frequency_response.cpp
+    src/analysis/pole_zero.cpp
 )
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
@@ -98,3 +99,8 @@ add_executable(test_frequency_response tests/test_frequency_response.cpp)
 target_link_libraries(test_frequency_response PRIVATE analysis_lib)
 target_include_directories(test_frequency_response PRIVATE tests)
 add_test(NAME test_frequency_response COMMAND test_frequency_response)
+
+add_executable(test_pole_zero tests/test_pole_zero.cpp)
+target_link_libraries(test_pole_zero PRIVATE analysis_lib)
+target_include_directories(test_pole_zero PRIVATE tests)
+add_test(NAME test_pole_zero COMMAND test_pole_zero)
