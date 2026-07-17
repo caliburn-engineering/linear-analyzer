@@ -74,9 +74,15 @@ target_link_libraries(implot PUBLIC imgui)
 # --- Analysis library (sources added incrementally) ---
 add_library(analysis_lib STATIC
     src/rk4.cpp
+    src/analysis/model_library.cpp
 )
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
 
 # --- Tests ---
 enable_testing()
+
+add_executable(test_model_library tests/test_model_library.cpp)
+target_link_libraries(test_model_library PRIVATE analysis_lib)
+target_include_directories(test_model_library PRIVATE tests)
+add_test(NAME test_model_library COMMAND test_model_library)
