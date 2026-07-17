@@ -1,0 +1,5 @@
+# projects/linear-analyzer/.gitignore
+build/
+.cache/
+imgui.ini
+compile_commands.json
