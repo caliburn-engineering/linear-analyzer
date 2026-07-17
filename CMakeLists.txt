@@ -79,6 +79,7 @@ add_library(analysis_lib STATIC
     src/analysis/frequency_response.cpp
     src/analysis/pole_zero.cpp
     src/analysis/time_response.cpp
+    src/analysis/system_connect.cpp
 )
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
@@ -110,3 +111,8 @@ add_executable(test_time_response tests/test_time_response.cpp)
 target_link_libraries(test_time_response PRIVATE analysis_lib)
 target_include_directories(test_time_response PRIVATE tests)
 add_test(NAME test_time_response COMMAND test_time_response)
+
+add_executable(test_system_connect tests/test_system_connect.cpp)
+target_link_libraries(test_system_connect PRIVATE analysis_lib)
+target_include_directories(test_system_connect PRIVATE tests)
+add_test(NAME test_system_connect COMMAND test_system_connect)
