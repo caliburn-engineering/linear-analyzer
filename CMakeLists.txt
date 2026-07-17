@@ -76,6 +76,7 @@ add_library(analysis_lib STATIC
     src/rk4.cpp
     src/analysis/model_library.cpp
     src/analysis/system_properties.cpp
+    src/analysis/frequency_response.cpp
 )
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
@@ -92,3 +93,8 @@ add_executable(test_system_properties tests/test_system_properties.cpp)
 target_link_libraries(test_system_properties PRIVATE analysis_lib)
 target_include_directories(test_system_properties PRIVATE tests)
 add_test(NAME test_system_properties COMMAND test_system_properties)
+
+add_executable(test_frequency_response tests/test_frequency_response.cpp)
+target_link_libraries(test_frequency_response PRIVATE analysis_lib)
+target_include_directories(test_frequency_response PRIVATE tests)
+add_test(NAME test_frequency_response COMMAND test_frequency_response)
