@@ -16,10 +16,12 @@ void drawNyquistPanel(AppState& state) {
         // Critical point (-1, 0)
         {
             double neg1 = -1.0, zero = 0.0;
-            ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 8,
-                                       ImVec4(1, 0.2f, 0.2f, 1), 2.0f,
-                                       ImVec4(0, 0, 0, 0));
-            ImPlot::PlotScatter("(-1,0)", &neg1, &zero, 1);
+            ImPlot::PlotScatter("(-1,0)", &neg1, &zero, 1,
+                                ImPlotSpec(ImPlotProp_Marker, ImPlotMarker_Circle,
+                                           ImPlotProp_MarkerSize, 8.0f,
+                                           ImPlotProp_MarkerFillColor, ImVec4(0, 0, 0, 0),
+                                           ImPlotProp_MarkerLineColor, ImVec4(1, 0.2f, 0.2f, 1),
+                                           ImPlotProp_LineWeight, 2.0f));
         }
 
         for (int s = 0; s < NUM_SYSTEMS; ++s) {
@@ -34,23 +36,27 @@ void drawNyquistPanel(AppState& state) {
                 im[k] = bode.nyquist[k].imag();
             }
 
-            ImPlot::SetNextLineStyle(system_colors[s], 2.0f);
             char lbl[32];
             std::snprintf(lbl, sizeof(lbl), "%s+", system_names[s]);
-            ImPlot::PlotLine(lbl, re.data(), im.data(), n);
+            ImPlot::PlotLine(lbl, re.data(), im.data(), n,
+                             ImPlotSpec(ImPlotProp_LineColor, system_colors[s],
+                                        ImPlotProp_LineWeight, 2.0f));
 
             std::vector<double> im_neg(n);
             for (int k = 0; k < n; ++k) im_neg[k] = -im[k];
             ImVec4 col_dim = system_colors[s];
             col_dim.w = 0.5f;
-            ImPlot::SetNextLineStyle(col_dim, 1.5f);
             std::snprintf(lbl, sizeof(lbl), "%s-", system_names[s]);
-            ImPlot::PlotLine(lbl, re.data(), im_neg.data(), n);
+            ImPlot::PlotLine(lbl, re.data(), im_neg.data(), n,
+                             ImPlotSpec(ImPlotProp_LineColor, col_dim,
+                                        ImPlotProp_LineWeight, 1.5f));
 
             for (int k = 0; k < n; k += std::max(n / 10, 1)) {
-                ImPlot::SetNextMarkerStyle(ImPlotMarker_Right, 4,
-                                           system_colors[s], 1.0f);
-                ImPlot::PlotScatter("##arr", &re[k], &im[k], 1);
+                ImPlot::PlotScatter("##arr", &re[k], &im[k], 1,
+                                    ImPlotSpec(ImPlotProp_Marker, ImPlotMarker_Right,
+                                               ImPlotProp_MarkerSize, 4.0f,
+                                               ImPlotProp_MarkerFillColor, system_colors[s],
+                                               ImPlotProp_LineWeight, 1.0f));
             }
         }
 

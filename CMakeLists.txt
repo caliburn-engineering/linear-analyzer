@@ -119,7 +119,15 @@ add_test(NAME test_system_connect COMMAND test_system_connect)
 
 # --- Visualizer executable ---
 find_package(OpenGL REQUIRED)
-add_executable(visualizer src/visualizer.cpp)
+add_executable(visualizer
+    src/visualizer.cpp
+    src/panels/model_panel.cpp
+    src/panels/properties_panel.cpp
+    src/panels/pole_zero_panel.cpp
+    src/panels/bode_panel.cpp
+    src/panels/nyquist_panel.cpp
+    src/panels/time_response_panel.cpp
+)
 target_link_libraries(visualizer PRIVATE
     analysis_lib
     imgui

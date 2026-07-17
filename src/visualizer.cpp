@@ -10,6 +10,13 @@
 
 #include <cstdio>
 
+#include "panels/model_panel.h"
+#include "panels/properties_panel.h"
+#include "panels/pole_zero_panel.h"
+#include "panels/bode_panel.h"
+#include "panels/nyquist_panel.h"
+#include "panels/time_response_panel.h"
+
 int main() {
     // --- Init GLFW ---
     glfwSetErrorCallback([](int err, const char* desc) {
@@ -112,7 +119,133 @@ int main() {
                          ImGuiDockNodeFlags_PassthruCentralNode);
         ImGui::End();
 
-        // Panels and recompute logic wired in Task 15
+        // --- Recompute analysis if needed ---
+        if (state.needs_recompute) {
+            state.needs_recompute = false;
+
+            // Plant is always system 0
+            state.systems[0] = state.plant;
+            state.system_valid[0] = true;
+
+            // Build derived systems
+            if (state.ctrl_type == caliburn::ControllerType::StateSpace) {
+                state.systems[1] = state.ctrl_ss;
+                state.system_valid[1] = true;
+                state.systems[2] = caliburn::seriesConnect(state.ctrl_ss, state.plant);
+                state.system_valid[2] = true;
+                state.systems[3] = caliburn::feedbackConnect(state.systems[2]);
+                state.system_valid[3] = true;
+            } else if (state.ctrl_type == caliburn::ControllerType::GainMatrix) {
+                state.system_valid[1] = false;
+                state.system_valid[2] = false;
+                state.systems[3] = caliburn::stateFeedbackClose(state.plant, state.ctrl_K);
+                state.system_valid[3] = true;
+            } else {
+                state.system_valid[1] = false;
+                state.system_valid[2] = false;
+                state.system_valid[3] = false;
+            }
+
+            // Frequency response
+            for (int s = 0; s < caliburn::NUM_SYSTEMS; ++s) {
+                if (!state.system_valid[s]) continue;
+                state.bode[s] = caliburn::computeBode(
+                    state.systems[s], state.output_i, state.input_j,
+                    state.freq_min_hz, state.freq_max_hz, state.num_freq_points);
+                state.pole_zero[s] = caliburn::computePoleZero(
+                    state.systems[s], state.output_i, state.input_j);
+            }
+
+            // All-channel Bode (when enabled)
+            if (state.show_all_channels) {
+                for (int s = 0; s < caliburn::NUM_SYSTEMS; ++s) {
+                    if (!state.system_valid[s]) continue;
+                    int p = state.systems[s].outputs();
+                    int m = state.systems[s].inputs();
+                    state.bode_grid[s].resize(p * m);
+                    for (int i = 0; i < p; ++i) {
+                        for (int j = 0; j < m; ++j) {
+                            state.bode_grid[s][i * m + j] = caliburn::computeBode(
+                                state.systems[s], i, j,
+                                state.freq_min_hz, state.freq_max_hz,
+                                state.num_freq_points);
+                        }
+                    }
+                }
+            }
+
+            // Time response for Plant and Closed-Loop
+            for (int s : {0, 3}) {
+                if (!state.system_valid[s]) continue;
+                switch (state.input_type) {
+                    case caliburn::InputType::Step:
+                        state.time_resp[s] = caliburn::computeStepResponse(
+                            state.systems[s], state.time_input_j,
+                            state.amplitude, state.duration, state.dt_sim);
+                        break;
+                    case caliburn::InputType::Impulse:
+                        state.time_resp[s] = caliburn::computeImpulseResponse(
+                            state.systems[s], state.time_input_j,
+                            state.amplitude, state.duration, state.dt_sim);
+                        break;
+                    case caliburn::InputType::Ramp:
+                        state.time_resp[s] = caliburn::computeRampResponse(
+                            state.systems[s], state.time_input_j,
+                            state.slope, state.duration, state.dt_sim);
+                        break;
+                }
+            }
+
+            // System properties
+            state.controllability = caliburn::checkControllability(state.plant);
+            state.observability = caliburn::checkObservability(state.plant);
+            if (state.system_valid[3]) {
+                state.cl_controllability =
+                    caliburn::checkControllability(state.systems[3]);
+                state.cl_observability =
+                    caliburn::checkObservability(state.systems[3]);
+            }
+
+            // Root locus
+            if (state.pz_mode == caliburn::PZMode::UnityFB) {
+                state.root_locus = caliburn::computeRootLocus(
+                    state.plant, state.output_i, state.input_j,
+                    state.rl_k_min, state.rl_k_max, state.rl_num_points);
+            } else if (state.pz_mode == caliburn::PZMode::StateFB &&
+                       state.ctrl_type == caliburn::ControllerType::GainMatrix) {
+                state.root_locus = caliburn::computeStateFeedbackLocus(
+                    state.plant, state.ctrl_K,
+                    state.rl_alpha_min, state.rl_alpha_max,
+                    state.rl_num_points);
+            }
+        }
+
+        // --- Panel toggle bar ---
+        ImGui::Begin("##toggles", nullptr,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_AlwaysAutoResize);
+        auto toggleBtn = [](const char* label, bool& flag) {
+            if (flag) {
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
+            }
+            if (ImGui::Button(label)) flag = !flag;
+            if (flag) ImGui::PopStyleColor();
+            ImGui::SameLine();
+        };
+        toggleBtn("Pole-Zero", state.show_pole_zero);
+        toggleBtn("Bode", state.show_bode);
+        toggleBtn("Nyquist", state.show_nyquist);
+        toggleBtn("Time Resp", state.show_time_response);
+        ImGui::End();
+
+        // --- Draw panels ---
+        caliburn::drawModelPanel(state, presets);
+        caliburn::drawPropertiesPanel(state);
+        caliburn::drawPoleZeroPanel(state);
+        caliburn::drawBodePanel(state);
+        caliburn::drawNyquistPanel(state);
+        caliburn::drawTimeResponsePanel(state);
 
         // --- Render ---
         ImGui::Render();

@@ -29,24 +29,26 @@ void plotBodeSingle(const char* suffix, AppState& state) {
                 f[k] = bode.points[k].freq_hz;
                 m[k] = bode.points[k].magnitude_db;
             }
-            ImPlot::SetNextLineStyle(system_colors[s], 2.0f);
-            ImPlot::PlotLine(system_names[s], f.data(), m.data(), n);
+            ImPlot::PlotLine(system_names[s], f.data(), m.data(), n,
+                             ImPlotSpec(ImPlotProp_LineColor, system_colors[s],
+                                        ImPlotProp_LineWeight, 2.0f));
         }
 
         double zero_db = 0.0;
-        ImPlot::PushStyleColor(ImPlotCol_Line, IM_COL32(255, 255, 255, 40));
-        ImPlot::PlotHLines("##0dB", &zero_db, 1);
-        ImPlot::PopStyleColor();
+        ImPlot::PlotInfLines("##0dB", &zero_db, 1,
+                             ImPlotSpec(ImPlotProp_LineColor,
+                                        ImVec4(1, 1, 1, 0.16f),
+                                        ImPlotProp_Flags,
+                                        (int)ImPlotInfLinesFlags_Horizontal));
 
         if (state.system_valid[2] && state.trace_visible[2] &&
             state.bode[2].phase_crossover_hz > 0) {
             double x = state.bode[2].phase_crossover_hz;
             double gm = state.bode[2].gain_margin_db;
-            ImPlot::PushStyleColor(ImPlotCol_Line, IM_COL32(255, 100, 100, 120));
-            ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 1.0f);
-            ImPlot::PlotInfLines("##gm_line", &x, 1);
-            ImPlot::PopStyleVar();
-            ImPlot::PopStyleColor();
+            ImPlot::PlotInfLines("##gm_line", &x, 1,
+                                 ImPlotSpec(ImPlotProp_LineColor,
+                                            ImVec4(1, 0.39f, 0.39f, 0.47f),
+                                            ImPlotProp_LineWeight, 1.0f));
             ImPlot::Annotation(x, 0.0, ImVec4(1, 0.4f, 0.4f, 1),
                                ImVec2(5, -10), true,
                                "GM=%.1f dB", gm);
@@ -74,24 +76,26 @@ void plotBodeSingle(const char* suffix, AppState& state) {
                 f[k] = bode.points[k].freq_hz;
                 p[k] = bode.points[k].phase_deg;
             }
-            ImPlot::SetNextLineStyle(system_colors[s], 2.0f);
-            ImPlot::PlotLine(system_names[s], f.data(), p.data(), n);
+            ImPlot::PlotLine(system_names[s], f.data(), p.data(), n,
+                             ImPlotSpec(ImPlotProp_LineColor, system_colors[s],
+                                        ImPlotProp_LineWeight, 2.0f));
         }
 
         double neg180 = -180.0;
-        ImPlot::PushStyleColor(ImPlotCol_Line, IM_COL32(255, 255, 255, 40));
-        ImPlot::PlotHLines("##-180", &neg180, 1);
-        ImPlot::PopStyleColor();
+        ImPlot::PlotInfLines("##-180", &neg180, 1,
+                             ImPlotSpec(ImPlotProp_LineColor,
+                                        ImVec4(1, 1, 1, 0.16f),
+                                        ImPlotProp_Flags,
+                                        (int)ImPlotInfLinesFlags_Horizontal));
 
         if (state.system_valid[2] && state.trace_visible[2] &&
             state.bode[2].gain_crossover_hz > 0) {
             double x = state.bode[2].gain_crossover_hz;
             double pm = state.bode[2].phase_margin_deg;
-            ImPlot::PushStyleColor(ImPlotCol_Line, IM_COL32(100, 200, 100, 120));
-            ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 1.0f);
-            ImPlot::PlotInfLines("##pm_line", &x, 1);
-            ImPlot::PopStyleVar();
-            ImPlot::PopStyleColor();
+            ImPlot::PlotInfLines("##pm_line", &x, 1,
+                                 ImPlotSpec(ImPlotProp_LineColor,
+                                            ImVec4(0.39f, 0.78f, 0.39f, 0.47f),
+                                            ImPlotProp_LineWeight, 1.0f));
             ImPlot::Annotation(x, -180.0, ImVec4(0.4f, 0.8f, 0.4f, 1),
                                ImVec2(5, -10), true,
                                "PM=%.1f\xc2\xb0", pm);
@@ -141,8 +145,9 @@ void drawBodePanel(AppState& state) {
                             std::snprintf(pid, sizeof(pid), "##bode_%d_%d_%d", i, j, s);
                             if (ImPlot::BeginPlot(pid, ImVec2(-1, 120))) {
                                 ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
-                                ImPlot::SetNextLineStyle(system_colors[s]);
-                                ImPlot::PlotLine(system_names[s], ff.data(), mm.data(), nn);
+                                ImPlot::PlotLine(system_names[s], ff.data(), mm.data(), nn,
+                                                 ImPlotSpec(ImPlotProp_LineColor,
+                                                            system_colors[s]));
                                 ImPlot::EndPlot();
                             }
                         }

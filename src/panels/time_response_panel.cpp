@@ -58,19 +58,20 @@ void drawTimeResponsePanel(AppState& state) {
                     y[k] = resp.points[k].output(oi);
                 }
 
-                ImPlot::SetNextLineStyle(system_colors[s], 2.0f);
                 const char* tag = (s == 0) ? "P" : "T";
                 char lbl[8];
                 std::snprintf(lbl, sizeof(lbl), "y%d%s", oi, tag);
-                ImPlot::PlotLine(lbl, t.data(), y.data(), n_pts);
+                ImPlot::PlotLine(lbl, t.data(), y.data(), n_pts,
+                                 ImPlotSpec(ImPlotProp_LineColor, system_colors[s],
+                                            ImPlotProp_LineWeight, 2.0f));
             }
         }
 
         if (ImPlot::IsPlotHovered()) {
             double mx = ImPlot::GetPlotMousePos().x;
-            ImPlot::PushStyleColor(ImPlotCol_Line, IM_COL32(255, 255, 255, 80));
-            ImPlot::PlotInfLines("##cursor", &mx, 1);
-            ImPlot::PopStyleColor();
+            ImPlot::PlotInfLines("##cursor", &mx, 1,
+                                 ImPlotSpec(ImPlotProp_LineColor,
+                                            ImVec4(1, 1, 1, 0.31f)));
             state.time_cursor_x = mx;
         }
 
@@ -96,17 +97,18 @@ void drawTimeResponsePanel(AppState& state) {
                     u[k] = resp.points[k].input(ui);
                 }
 
-                ImPlot::SetNextLineStyle(system_colors[0], 2.0f);
                 char lbl[8];
                 std::snprintf(lbl, sizeof(lbl), "u%d", ui);
-                ImPlot::PlotLine(lbl, t.data(), u.data(), n_pts);
+                ImPlot::PlotLine(lbl, t.data(), u.data(), n_pts,
+                                 ImPlotSpec(ImPlotProp_LineColor, system_colors[0],
+                                            ImPlotProp_LineWeight, 2.0f));
             }
         }
 
         if (state.time_cursor_x >= 0) {
-            ImPlot::PushStyleColor(ImPlotCol_Line, IM_COL32(255, 255, 255, 80));
-            ImPlot::PlotInfLines("##cursor", &state.time_cursor_x, 1);
-            ImPlot::PopStyleColor();
+            ImPlot::PlotInfLines("##cursor", &state.time_cursor_x, 1,
+                                 ImPlotSpec(ImPlotProp_LineColor,
+                                            ImVec4(1, 1, 1, 0.31f)));
             state.time_cursor_x = -1.0;
         }
 
