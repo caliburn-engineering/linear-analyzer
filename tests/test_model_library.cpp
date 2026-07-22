@@ -54,32 +54,37 @@ void test_parse_empty() {
 
 void test_builtin_models() {
     auto models = caliburn::getBuiltinModels();
-    ASSERT_TRUE(models.size() >= 5);
+    ASSERT_TRUE(models.size() >= 6);
 
-    // Second-Order: 2 states, 1 input, 1 output
-    ASSERT_EQ(models[0].system.states(), 2);
+    // First-Order: 1 state, 1 input, 1 output
+    ASSERT_EQ(models[0].system.states(), 1);
     ASSERT_EQ(models[0].system.inputs(), 1);
     ASSERT_EQ(models[0].system.outputs(), 1);
 
-    // Ball-Balancer: 4 states, 2 inputs, 2 outputs
-    ASSERT_EQ(models[1].system.states(), 4);
-    ASSERT_EQ(models[1].system.inputs(), 2);
-    ASSERT_EQ(models[1].system.outputs(), 2);
+    // Second-Order: 2 states, 1 input, 1 output
+    ASSERT_EQ(models[1].system.states(), 2);
+    ASSERT_EQ(models[1].system.inputs(), 1);
+    ASSERT_EQ(models[1].system.outputs(), 1);
 
-    // Inverted Pendulum: 4 states, 1 input, 2 outputs
+    // Ball-Balancer: 4 states, 2 inputs, 2 outputs
     ASSERT_EQ(models[2].system.states(), 4);
-    ASSERT_EQ(models[2].system.inputs(), 1);
+    ASSERT_EQ(models[2].system.inputs(), 2);
     ASSERT_EQ(models[2].system.outputs(), 2);
 
-    // Quarter-Car: 4 states, 1 input, 2 outputs
+    // Inverted Pendulum: 4 states, 1 input, 2 outputs
     ASSERT_EQ(models[3].system.states(), 4);
     ASSERT_EQ(models[3].system.inputs(), 1);
     ASSERT_EQ(models[3].system.outputs(), 2);
 
-    // Double Mass-Spring: 4 states, 1 input, 2 outputs
+    // Quarter-Car: 4 states, 1 input, 2 outputs
     ASSERT_EQ(models[4].system.states(), 4);
     ASSERT_EQ(models[4].system.inputs(), 1);
     ASSERT_EQ(models[4].system.outputs(), 2);
+
+    // Double Mass-Spring: 4 states, 1 input, 2 outputs
+    ASSERT_EQ(models[5].system.states(), 4);
+    ASSERT_EQ(models[5].system.inputs(), 1);
+    ASSERT_EQ(models[5].system.outputs(), 2);
 }
 
 int main() {
