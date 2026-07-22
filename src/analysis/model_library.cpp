@@ -164,8 +164,8 @@ std::vector<ModelEntry> getBuiltinModels() {
              "  - Structural vibration mode"},
 
             {"Equations of Motion (ODE)",
-             "Newton's second law (sum of forces = m\xc2\xb7a):\n\n"
-             "  m\xc2\xb7d\xc2\xb2x/dt\xc2\xb2 = -k\xc2\xb7x - b\xc2\xb7dx/dt + F\n\n"
+             "Newton's second law (sum of forces = m\xc2\xb7" "a):\n\n"
+             "  m\xc2\xb7" "d\xc2\xb2x/dt\xc2\xb2 = -k\xc2\xb7x - b\xc2\xb7" "dx/dt + F\n\n"
              "Rearranged:\n"
              "  m\xc2\xb7x'' + b\xc2\xb7x' + k\xc2\xb7x = F\n\n"
              "where:\n"
@@ -193,7 +193,7 @@ std::vector<ModelEntry> getBuiltinModels() {
             {"State-Space Form",
              "Choose states: x1 = position, x2 = velocity\n\n"
              "  x1' = x2\n"
-             "  x2' = -(k/m)\xc2\xb7x1 - (b/m)\xc2\xb7x2 + (1/m)\xc2\xb7F\n\n"
+             "  x2' = -(k/m)\xc2\xb7x1 - (b/m)\xc2\xb7x2 + (1/m)\xc2\xb7" "F\n\n"
              "Matrix form:\n"
              "  A = [  0       1   ]    B = [  0  ]\n"
              "      [-k/m   -b/m   ]        [1/m  ]\n\n"
@@ -244,10 +244,10 @@ std::vector<ModelEntry> getBuiltinModels() {
 
             {"Equations of Motion (ODE)",
              "For a sphere rolling without slip on an incline:\n\n"
-             "  (m + I/r\xc2\xb2)\xc2\xb7a = m\xc2\xb7g\xc2\xb7sin(\xce\xb8)\n\n"
+             "  (m + I/r\xc2\xb2)\xc2\xb7" "a = m\xc2\xb7g\xc2\xb7sin(\xce\xb8)\n\n"
              "For a solid sphere, I = (2/5)\xc2\xb7m\xc2\xb7r\xc2\xb2:\n"
-             "  (m + 2m/5)\xc2\xb7a = m\xc2\xb7g\xc2\xb7sin(\xce\xb8)\n"
-             "  (7/5)\xc2\xb7a = g\xc2\xb7sin(\xce\xb8)\n\n"
+             "  (m + 2m/5)\xc2\xb7" "a = m\xc2\xb7g\xc2\xb7sin(\xce\xb8)\n"
+             "  (7/5)\xc2\xb7" "a = g\xc2\xb7sin(\xce\xb8)\n\n"
              "Linearize for small angles (sin\xce\xb8 \xe2\x89\x88 \xce\xb8):\n"
              "  x'' = (5g/7)\xc2\xb7\xce\xb8y     (tilt about y moves ball in x)\n"
              "  y'' = (5g/7)\xc2\xb7\xce\xb8x     (tilt about x moves ball in y)"},
@@ -320,15 +320,15 @@ std::vector<ModelEntry> getBuiltinModels() {
 
             {"Equations of Motion (ODE)",
              "Nonlinear Newton-Euler equations:\n\n"
-             "  (M+m)\xc2\xb7x'' + m\xc2\xb7l\xc2\xb7\xce\xb8''\xc2\xb7cos\xce\xb8 - m\xc2\xb7l\xc2\xb7\xce\xb8'\xc2\xb2\xc2\xb7sin\xce\xb8 = F\n"
-             "  m\xc2\xb7l\xc2\xb7x''\xc2\xb7cos\xce\xb8 + m\xc2\xb7l\xc2\xb2\xc2\xb7\xce\xb8'' - m\xc2\xb7g\xc2\xb7l\xc2\xb7sin\xce\xb8 = 0\n\n"
+             "  (M+m)\xc2\xb7x'' + m\xc2\xb7l\xc2\xb7\xce\xb8''\xc2\xb7" "cos\xce\xb8 - m\xc2\xb7l\xc2\xb7\xce\xb8'\xc2\xb2\xc2\xb7sin\xce\xb8 = F\n"
+             "  m\xc2\xb7l\xc2\xb7x''\xc2\xb7" "cos\xce\xb8 + m\xc2\xb7l\xc2\xb2\xc2\xb7\xce\xb8'' - m\xc2\xb7g\xc2\xb7l\xc2\xb7sin\xce\xb8 = 0\n\n"
              "Linearize about \xce\xb8=0 (upright):\n"
              "  cos\xce\xb8 \xe2\x89\x88 1, sin\xce\xb8 \xe2\x89\x88 \xce\xb8, \xce\xb8'\xc2\xb2 \xe2\x89\x88 0\n\n"
              "  (M+m)\xc2\xb7x'' + m\xc2\xb7l\xc2\xb7\xce\xb8'' = F\n"
              "  x'' + l\xc2\xb7\xce\xb8'' = g\xc2\xb7\xce\xb8\n\n"
              "Solve for accelerations:\n"
-             "  x'' = -(m\xc2\xb7g/M)\xc2\xb7\xce\xb8 + (1/M)\xc2\xb7F\n"
-             "  \xce\xb8'' = ((M+m)\xc2\xb7g/(M\xc2\xb7l))\xc2\xb7\xce\xb8 - (1/(M\xc2\xb7l))\xc2\xb7F"},
+             "  x'' = -(m\xc2\xb7g/M)\xc2\xb7\xce\xb8 + (1/M)\xc2\xb7" "F\n"
+             "  \xce\xb8'' = ((M+m)\xc2\xb7g/(M\xc2\xb7l))\xc2\xb7\xce\xb8 - (1/(M\xc2\xb7l))\xc2\xb7" "F"},
 
             {"Stability Analysis",
              "The linearized system has a positive eigenvalue:\n"
