@@ -64,6 +64,9 @@ struct AppState {
     PropertyResult cl_observability{};
     std::vector<RootLocusPoint> root_locus;
 
+    // --- Physical parameters (mutable copy of current preset's params) ---
+    std::vector<PhysicalParam> current_params;
+
     // All-channel results (populated when show_all_channels is true)
     std::vector<FrequencyResponse> bode_grid[NUM_SYSTEMS];
 
@@ -102,6 +105,14 @@ struct AppState {
     float rl_alpha_max = 2.0f;
     float rl_current_alpha = 1.0f;
 
+    // --- Transfer function parameterization (1st/2nd order SISO) ---
+    bool plant_is_1st_order = false;
+    bool plant_is_2nd_order = false;
+    float tf_K = 1.0f;
+    float tf_tau = 1.0f;
+    float tf_wn = 1.0f;
+    float tf_zeta = 0.7f;
+
     // --- Text fields for matrix entry ---
     char A_text[1024] = "";
     char B_text[1024] = "";
@@ -113,8 +124,9 @@ struct AppState {
     char Dc_text[1024] = "";
     char K_text[1024] = "";
 
-    // --- Time response cursor (for synchronized vertical line) ---
+    // --- Cursors (for synchronized vertical lines + value readout) ---
     double time_cursor_x = -1.0;
+    double bode_cursor_x = -1.0;
     double time_x_min = 0.0;
     double time_x_max = 10.0;
 };
