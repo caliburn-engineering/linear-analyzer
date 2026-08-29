@@ -13,6 +13,7 @@
 #include "implot.h"
 
 #include <cstdio>
+#include <cstdlib>
 
 #include "panels/model_panel.h"
 #include "panels/properties_panel.h"
@@ -284,8 +285,10 @@ int main() {
     // --- Init app state ---
     caliburn::AppState state;
     auto presets = caliburn::getBuiltinModels();
-    state.plant = presets[0].system;
-    state.current_params = presets[0].params;
+    // PROTOTYPE #6: env override so each variant can be screenshotted headlessly.
+    if (const char* pv = std::getenv("PROTO_PRESET")) state.preset_index = std::atoi(pv);
+    state.plant = presets[state.preset_index].system;
+    state.current_params = presets[state.preset_index].params;
     caliburn::matrixToTextBuf(state.plant.A, state.A_text, sizeof(state.A_text));
     caliburn::matrixToTextBuf(state.plant.B, state.B_text, sizeof(state.B_text));
     caliburn::matrixToTextBuf(state.plant.C, state.C_text, sizeof(state.C_text));

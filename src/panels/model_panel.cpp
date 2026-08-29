@@ -1,5 +1,6 @@
 // src/panels/model_panel.cpp
 #include "model_panel.h"
+#include "loop_ui_prototype.h"  // PROTOTYPE #6
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -279,83 +280,10 @@ void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
         state.needs_recompute = true;
     }
 
-    // --- Controller section ---
-    ImGui::SeparatorText("Controller");
-    const char* ctrl_types[] = {"None", "State-Space", "Gain Matrix K"};
-    int ctrl_idx = static_cast<int>(state.ctrl_type);
-    if (ImGui::Combo("Type", &ctrl_idx, ctrl_types, 3)) {
-        state.ctrl_type = static_cast<ControllerType>(ctrl_idx);
-        state.needs_recompute = true;
-        if (state.ctrl_type != ControllerType::None) {
-            state.trace_visible[3] = true;
-            if (state.ctrl_type == ControllerType::StateSpace) {
-                state.trace_visible[1] = true;
-            }
-        } else {
-            state.trace_visible[1] = false;
-            state.trace_visible[3] = false;
-        }
-    }
-
-    if (state.ctrl_type == ControllerType::StateSpace) {
-        ImGui::InputText("Ac", state.Ac_text, sizeof(state.Ac_text));
-        ImGui::InputText("Bc", state.Bc_text, sizeof(state.Bc_text));
-        ImGui::InputText("Cc", state.Cc_text, sizeof(state.Cc_text));
-        ImGui::InputText("Dc", state.Dc_text, sizeof(state.Dc_text));
-        if (ImGui::Button("Apply Controller")) {
-            auto Ac = parseMatrix(state.Ac_text);
-            auto Bc = parseMatrix(state.Bc_text);
-            auto Cc = parseMatrix(state.Cc_text);
-            auto Dc = parseMatrix(state.Dc_text);
-            if (Ac && Bc && Cc && Dc &&
-                Ac->rows() == Ac->cols() &&
-                Bc->rows() == Ac->rows() &&
-                Cc->cols() == Ac->cols() &&
-                Dc->rows() == Cc->rows() &&
-                Dc->cols() == Bc->cols()) {
-                state.ctrl_ss = {*Ac, *Bc, *Cc, *Dc};
-                state.needs_recompute = true;
-            }
-        }
-        if (state.ctrl_ss.A.size() > 0) {
-            bool ctrl_slider_changed = false;
-            ImGui::TextUnformatted("Ac:");
-            ctrl_slider_changed |= drawMatrixSliders("Ac", state.ctrl_ss.A, state.Ac_text, sizeof(state.Ac_text));
-            ImGui::TextUnformatted("Bc:");
-            ctrl_slider_changed |= drawMatrixSliders("Bc", state.ctrl_ss.B, state.Bc_text, sizeof(state.Bc_text));
-            ImGui::TextUnformatted("Cc:");
-            ctrl_slider_changed |= drawMatrixSliders("Cc", state.ctrl_ss.C, state.Cc_text, sizeof(state.Cc_text));
-            ImGui::TextUnformatted("Dc:");
-            ctrl_slider_changed |= drawMatrixSliders("Dc", state.ctrl_ss.D, state.Dc_text, sizeof(state.Dc_text));
-            if (ctrl_slider_changed) state.needs_recompute = true;
-        }
-    } else if (state.ctrl_type == ControllerType::GainMatrix) {
-        ImGui::TextDisabled("K must be %d x %d (inputs x states)",
-                            state.plant.inputs(), state.plant.states());
-        ImGui::InputText("K", state.K_text, sizeof(state.K_text));
-        if (ImGui::Button("Apply K")) {
-            auto K = parseMatrix(state.K_text);
-            if (K && K->rows() == state.plant.inputs() &&
-                K->cols() == state.plant.states()) {
-                state.ctrl_K = *K;
-                state.needs_recompute = true;
-            } else if (K) {
-                ImGui::OpenPopup("K_dim_err");
-            }
-        }
-        if (ImGui::BeginPopup("K_dim_err")) {
-            ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1),
-                "K must be %d x %d, got %d x %d",
-                state.plant.inputs(), state.plant.states(),
-                (int)state.ctrl_K.rows(), (int)state.ctrl_K.cols());
-            ImGui::EndPopup();
-        }
-        if (state.ctrl_K.size() > 0) {
-            ImGui::TextUnformatted("K:");
-            if (drawMatrixSliders("K", state.ctrl_K, state.K_text, sizeof(state.K_text)))
-                state.needs_recompute = true;
-        }
-    }
+    // --- Controller section --- [PROTOTYPE #6: real section replaced]
+    // The real controller section lives in git history; this branch swaps in the
+    // loop-list variants. Restore by reverting this commit.
+    proto::drawControllerSection(state);
 
     // --- Channel selector ---
     ImGui::SeparatorText("Channel");
@@ -407,6 +335,8 @@ void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
     ImGui::PopStyleColor();
 
     ImGui::End();
+
+    proto::drawSwitcher();  // PROTOTYPE #6
 }
 
 }  // namespace caliburn
