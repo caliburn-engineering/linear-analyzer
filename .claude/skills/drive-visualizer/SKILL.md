@@ -106,3 +106,15 @@ where you predict.
 
 Killing the app: `pkill -x visualizer`. **Not** `pkill -f build/visualizer` —
 `-f` matches the agent's own shell command line and kills the session.
+
+## Workspaces and scroll traps
+
+- **The window may be on another workspace.** `grim` captures the *visible*
+  output and `ydotool` clicks land on the *visible* workspace, so a stale
+  window elsewhere means you screenshot someone else's app and click into it.
+  `hl.dsp.focus({window=...})` switches workspace as a side effect, so focus
+  first, then confirm with `hyprctl activewindow -j` before clicking.
+- **ImPlot eats the scroll wheel to zoom.** Scrolling with the cursor over any
+  plot zooms that plot instead of scrolling its panel, and there is no undo —
+  restart the app. Scroll panels from a non-plot column (the model panel is
+  safe at x ~170).

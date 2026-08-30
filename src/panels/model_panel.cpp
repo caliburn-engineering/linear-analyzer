@@ -295,17 +295,31 @@ static void drawPairingGrid(AppState& state) {
                            "%.3g", ImGuiSliderFlags_Logarithmic))
         state.needs_recompute = true;
 
-    ImGui::Checkbox("RGA number vs \xcf\x89", &state.diag_sweep);
-    if (state.diag_sweep) {
+    // Only offered where an RGA exists — a flat zero strip under Channel Share
+    // would imply a number that is not defined.
+    if (state.diagnostics.has_rga) {
+        ImGui::Checkbox("RGA number vs \xcf\x89", &state.diag_sweep);
+    }
+    if (state.diag_sweep && state.diagnostics.has_rga) {
         float vals[40];
+        float vmin = FLT_MAX, vmax = -FLT_MAX;
         for (int k = 0; k < 40; ++k) {
             const double f = state.freq_min_hz *
                 std::pow(state.freq_max_hz / state.freq_min_hz, k / 39.0);
             const double v = rgaNumberAt(state.plant, state.loops, f);
             vals[k] = std::isnan(v) ? 0.0f : static_cast<float>(v);
+            vmin = std::min(vmin, vals[k]);
+            vmax = std::max(vmax, vals[k]);
         }
-        ImGui::PlotLines("##sweep", vals, 40, 0, nullptr, 0.0f, FLT_MAX,
-                         ImVec2(-FLT_MIN, 46));
+        // Explicit headroom.  Auto-scaling puts a CONSTANT sweep flush against
+        // the frame's top edge, where it is invisible — and a constant RGA
+        // number is exactly the Ball-Balancer demo case (4.00 at every omega,
+        // by scaling invariance).
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "%.2f - %.2f over %.3g-%.3g Hz",
+                      vmin, vmax, state.freq_min_hz, state.freq_max_hz);
+        ImGui::PlotLines("##sweep", vals, 40, 0, overlay,
+                         0.0f, vmax * 1.25f + 0.1f, ImVec2(-FLT_MIN, 46));
     }
 
     // The subtitle carries the definition AND the explicit negative.  The

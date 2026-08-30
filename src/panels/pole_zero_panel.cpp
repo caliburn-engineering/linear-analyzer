@@ -131,6 +131,17 @@ void drawPoleZeroPanel(AppState& state) {
         ImGui::TextDisabled("%s", why);
     }
 
+    // A suppressed trace must be distinguishable from breakage, so the reason
+    // is drawn BEFORE the plots — they consume GetContentRegionAvail(), and
+    // anything after them is clipped out of the panel entirely.
+    for (int s = 0; s < NUM_SYSTEMS; ++s) {
+        if (s == 2 || state.channel_reason[s].empty()) continue;
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.35f, 1.0f));
+        ImGui::TextWrapped("%s suppressed \xe2\x80\x94 %s", system_names[s],
+                           state.channel_reason[s].c_str());
+        ImGui::PopStyleColor();
+    }
+
     // Compute axis limits from visible data (mode-dependent)
     double pz_xmin = 0, pz_xmax = 0, pz_ymin = 0, pz_ymax = 0;
     bool pz_has_data = false;
@@ -305,13 +316,6 @@ void drawPoleZeroPanel(AppState& state) {
         }
 
         ImPlot::EndPlot();
-    }
-
-    // A suppressed trace must be distinguishable from breakage.
-    for (int s = 0; s < NUM_SYSTEMS; ++s) {
-        if (s == 2 || state.channel_reason[s].empty()) continue;
-        ImGui::TextDisabled("%s: %s", system_names[s],
-                            state.channel_reason[s].c_str());
     }
 
     ImGui::End();

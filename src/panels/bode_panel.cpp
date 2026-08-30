@@ -278,6 +278,18 @@ void drawBodePanel(AppState& state) {
     }
     if (freq_changed) state.needs_recompute = true;
 
+    // A suppressed trace must be distinguishable from breakage, so the reason
+    // is drawn BEFORE the plots — they consume GetContentRegionAvail(), and
+    // anything after them is clipped out of the panel entirely.
+    for (int s = 0; s < NUM_SYSTEMS; ++s) {
+        if (s == 2 || state.channel_reason[s].empty()) continue;
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.35f, 1.0f));
+        ImGui::TextWrapped("%s suppressed \xe2\x80\x94 %s", system_names[s],
+                           state.channel_reason[s].c_str());
+        ImGui::PopStyleColor();
+    }
+
+
     if (state.show_all_channels) {
         const int p = state.plant.outputs();
         const int m = state.plant.inputs();
@@ -356,13 +368,6 @@ void drawBodePanel(AppState& state) {
         float avail_h = ImGui::GetContentRegionAvail().y;
         float plot_h = avail_h / 2.0f;
         plotBodeSingle("##single", state, plot_h, margin_sys);
-    }
-
-    // A suppressed trace must be distinguishable from breakage.
-    for (int s = 0; s < NUM_SYSTEMS; ++s) {
-        if (s == 2 || state.channel_reason[s].empty()) continue;
-        ImGui::TextDisabled("%s: %s", system_names[s],
-                            state.channel_reason[s].c_str());
     }
 
     ImGui::End();
