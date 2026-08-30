@@ -1,5 +1,6 @@
 // src/panels/model_panel.cpp
 #include "model_panel.h"
+#include "../analysis/loop_diagnostics.h"
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -91,7 +92,285 @@ bool drawMatrixSliders(const char* name, Eigen::MatrixXd& mat,
     return changed;
 }
 
+
+// Ki and Kd must reach exactly 0 and still resolve small values, and the spec
+// asks for "linear 0-1, then log 1-hi".  ImGuiSliderFlags_Logarithmic DOES work
+// with v_min = 0 — verified in the prototype's bench, no assert, no crash,
+// ImGui's zero epsilon handles it — but it is rejected on emphasis: a value of
+// 0.5 sits at ~62% of travel, compressing the 1-hi decades into the last third,
+// the inverse of the split the spec asks for.  This puts 0.5 at exactly 25%.
+bool gainSliderPiecewise(const char* id, float* v, float hi) {
+    const float lin_hi = 1.0f;
+    float t = (*v <= lin_hi)
+                  ? 0.5f * (*v / lin_hi)
+                  : 0.5f + 0.5f * std::log(*v / lin_hi) / std::log(hi / lin_hi);
+    char fmt[32];
+    std::snprintf(fmt, sizeof(fmt), "%.4g", *v);  // display the true value
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat(id, &t, 0.0f, 1.0f, fmt)) {
+        *v = (t <= 0.5f) ? 2.0f * t * lin_hi
+                         : lin_hi * std::pow(hi / lin_hi, (t - 0.5f) * 2.0f);
+        return true;
+    }
+    return false;
+}
+
+// Severity is graded from the RGA number, never from |lambda_ii|, and applies
+// to RGA cells only — Channel Share is never coloured.
+ImVec4 severityFill(double rga_number) {
+    if (rga_number < 0.5) return ImVec4(0.12f, 0.32f, 0.16f, 1.0f);
+    if (rga_number < 2.0) return ImVec4(0.36f, 0.30f, 0.10f, 1.0f);
+    return ImVec4(0.40f, 0.14f, 0.14f, 1.0f);
+}
+
 }  // anonymous namespace
+
+// The controller section for a loop-backed controller: the p x m matrix IS the
+// editor.  Click a cell to pair or unpair; the same widget that grades the
+// pairing is the one that creates it.
+//
+// 354 px — the docked panel's width in the checked-in imgui.ini — is the
+// binding constraint, and it is what eliminated the ledger layout the spec
+// sketched.  There are deliberately NO add / remove / reorder controls: cells
+// are the affordance and grid order is loop order.  One consequence is that an
+// exact duplicate pairing is unreachable here, so issue #2's duplicate caution
+// needs no UI surface — the builder still sums duplicates, which is correct for
+// a loop list built programmatically.  All fan-out shapes stay expressible:
+// many-to-one is several cells in one row, one-to-many several in one column.
+static void drawPairingGrid(AppState& state) {
+    const int gp = state.plant.outputs();
+    const int gm = state.plant.inputs();
+    const auto& diag = state.diagnostics;
+
+    ImGui::TextDisabled("click to pair or select; click the selected cell to unpair");
+
+    // Columns: per-output scale, row label, then one cell per plant input.
+    // The scale column supersedes a collapsed "scales: default (1, 1)" status
+    // line — the values are on screen, so nothing has to state whether they are
+    // still at default, and the row header is where per-output metadata would
+    // naturally go if that fog ever clears.
+    if (ImGui::BeginTable("##pairgrid", gm + 2,
+                          ImGuiTableFlags_Borders |
+                          ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("scale", ImGuiTableColumnFlags_WidthFixed, 56);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24);
+        for (int j = 0; j < gm; ++j) {
+            char h[8];
+            std::snprintf(h, sizeof(h), "u%d", j);
+            ImGui::TableSetupColumn(h, ImGuiTableColumnFlags_WidthFixed, 74);
+        }
+        ImGui::TableHeadersRow();
+
+        for (int i = 0; i < gp; ++i) {
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+
+            ImGui::TableNextColumn();
+            if (i < static_cast<int>(state.output_scales.size())) {
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::DragFloat("##sc", &state.output_scales[i], 0.01f,
+                                     0.001f, 1000.0f, "%.3g"))
+                    state.needs_recompute = true;
+            }
+
+            ImGui::TableNextColumn();
+            ImGui::Text("y%d", i);
+
+            for (int j = 0; j < gm; ++j) {
+                ImGui::TableNextColumn();
+                ImGui::PushID(j);
+
+                int found = -1;
+                for (std::size_t k = 0; k < state.loops.size(); ++k)
+                    if (state.loops[k].out == i && state.loops[k].in == j) {
+                        found = static_cast<int>(k);
+                        break;
+                    }
+                const bool paired = found >= 0;
+
+                // Two lines: the diagnostic over |g_ij| in dB, dimmed.  The dB
+                // line is REQUIRED under Channel Share, which cannot tell
+                // "drives both strongly" from "drives neither"; under the RGA
+                // it is free and still worth reading.
+                char top[24] = "-";
+                if (diag.has_rga) {
+                    const auto ro = std::find(diag.sub_out.begin(),
+                                              diag.sub_out.end(), i);
+                    const auto co = std::find(diag.sub_in.begin(),
+                                              diag.sub_in.end(), j);
+                    if (ro != diag.sub_out.end() && co != diag.sub_in.end())
+                        std::snprintf(top, sizeof(top), "%.2f",
+                            diag.lambda(ro - diag.sub_out.begin(),
+                                        co - diag.sub_in.begin()));
+                } else if (diag.has_share && j == diag.share_in &&
+                           i < static_cast<int>(diag.share.size())) {
+                    std::snprintf(top, sizeof(top), "%.0f%%",
+                                  100.0 * diag.share[i]);
+                }
+
+                char cell[64];
+                if (i < static_cast<int>(diag.mag_db.size()) &&
+                    diag.has_share && j == diag.share_in) {
+                    std::snprintf(cell, sizeof(cell), "%s\n%.1f dB##c",
+                                  top, diag.mag_db[i]);
+                } else {
+                    std::snprintf(cell, sizeof(cell), "%s\n##c", top);
+                }
+
+                // Paired-ness is the BORDER; severity is the FILL.  One
+                // encoding cannot carry both.
+                const bool is_selected = (found >= 0 && found == state.selected_loop);
+                const bool colour_cell = paired && diag.has_rga;
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    colour_cell ? severityFill(diag.rga_number)
+                                : ImVec4(0.16f, 0.16f, 0.18f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Border,
+                    is_selected ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f)
+                                : ImVec4(0.35f, 0.72f, 1.0f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,
+                                    paired ? 2.0f : 0.0f);
+
+                // One button, three outcomes, so a single click can both
+                // select a loop for editing and still be the unpair
+                // affordance:
+                //   unpaired            -> pair it and select it
+                //   paired, not current -> select it (gains below)
+                //   paired, current     -> unpair it
+                // The prototype only had the first and third, which left an
+                // existing loop's gains unreachable without unpairing it first.
+                if (ImGui::Button(cell, ImVec2(-FLT_MIN, 34))) {
+                    if (!paired) {
+                        state.loops.push_back(Loop{i, j, {}, {}});
+                        state.selected_loop =
+                            static_cast<int>(state.loops.size()) - 1;
+                        state.needs_recompute = true;
+                    } else if (state.selected_loop != found) {
+                        state.selected_loop = found;
+                    } else {
+                        state.loops.erase(state.loops.begin() + found);
+                        state.selected_loop = state.loops.empty() ? -1 : 0;
+                        state.needs_recompute = true;
+                    }
+                }
+
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(2);
+
+                if (paired &&
+                    found < static_cast<int>(diag.loop_dead.size()) &&
+                    diag.loop_dead[found]) {
+                    ImGui::SameLine(0, 2);
+                    ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "!");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "u%d does not affect y%d at any frequency", j, i);
+                }
+                ImGui::PopID();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    // One omega, plus a collapsed sweep.  No separate steady-state frequency:
+    // S&P rule 2 is a DIC theorem requiring a stable plant, and neither
+    // Ball-Balancer nor Inverted Pendulum qualifies, so a permanently
+    // inapplicable readout would earn its space on no preset.
+    ImGui::TextUnformatted("\xcf\x89 [Hz]"); ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##diagw", &state.diag_omega_hz, 0.01f, 100.0f,
+                           "%.3g", ImGuiSliderFlags_Logarithmic))
+        state.needs_recompute = true;
+
+    ImGui::Checkbox("RGA number vs \xcf\x89", &state.diag_sweep);
+    if (state.diag_sweep) {
+        float vals[40];
+        for (int k = 0; k < 40; ++k) {
+            const double f = state.freq_min_hz *
+                std::pow(state.freq_max_hz / state.freq_min_hz, k / 39.0);
+            const double v = rgaNumberAt(state.plant, state.loops, f);
+            vals[k] = std::isnan(v) ? 0.0f : static_cast<float>(v);
+        }
+        ImGui::PlotLines("##sweep", vals, 40, 0, nullptr, 0.0f, FLT_MAX,
+                         ImVec2(-FLT_MIN, 46));
+    }
+
+    // The subtitle carries the definition AND the explicit negative.  The
+    // failure mode guarded against is a user reading a number in the pairing
+    // area and assuming it grades their pairing.
+    ImGui::TextWrapped("%s", state.diagnostics.headline.c_str());
+    if (state.diagnostics.has_share) {
+        ImGui::TextDisabled(
+            "Channel Share is not the RGA and does not grade the pairing.");
+    }
+
+    // Gain block for the selected loop, full width, below the grid.
+    if (state.selected_loop >= 0 &&
+        state.selected_loop < static_cast<int>(state.loops.size())) {
+        Loop& l = state.loops[state.selected_loop];
+        char hdr[64];
+        std::snprintf(hdr, sizeof(hdr), "Gains  y%d \xe2\x86\x90 u%d",
+                      l.out, l.in);
+        ImGui::SeparatorText(hdr);
+
+        bool g_changed = false;
+        if (state.ctrl_type == ControllerType::PID) {
+            ImGui::TextUnformatted("Kp"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            g_changed |= ImGui::SliderFloat("##Kp", &l.pid.Kp, 0.01f, 100.0f,
+                                            "%.4g", ImGuiSliderFlags_Logarithmic);
+            ImGui::TextUnformatted("Ki"); ImGui::SameLine();
+            g_changed |= gainSliderPiecewise("##Ki", &l.pid.Ki, 50.0f);
+            ImGui::TextUnformatted("Kd"); ImGui::SameLine();
+            g_changed |= gainSliderPiecewise("##Kd", &l.pid.Kd, 20.0f);
+            ImGui::TextUnformatted("\xcf\x84f"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            g_changed |= ImGui::SliderFloat("##tauf", &l.pid.tau_f,
+                                            0.001f, 1.0f, "%.4g",
+                                            ImGuiSliderFlags_Logarithmic);
+        } else {
+            // Kind is one top-level combo for the whole list; Lead/Lag MODE is
+            // per loop, inside the gain block.
+            const char* modes[] = {"Lead", "Lag", "Lead-Lag"};
+            int mi = static_cast<int>(l.leadlag.mode);
+            if (ImGui::Combo("Mode", &mi, modes, 3)) {
+                l.leadlag.mode = static_cast<CompensatorMode>(mi);
+                g_changed = true;
+            }
+            ImGui::TextUnformatted("Kc"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            g_changed |= ImGui::SliderFloat("##Kc", &l.leadlag.Kc, 0.1f, 100.0f,
+                                            "%.4g", ImGuiSliderFlags_Logarithmic);
+            if (l.leadlag.mode != CompensatorMode::Lag) {
+                ImGui::TextUnformatted("\xce\xb1 lead"); ImGui::SameLine();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                g_changed |= ImGui::SliderFloat("##al", &l.leadlag.alpha_lead,
+                                                0.01f, 0.99f, "%.4g",
+                                                ImGuiSliderFlags_Logarithmic);
+                ImGui::TextUnformatted("T lead"); ImGui::SameLine();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                g_changed |= ImGui::SliderFloat("##Tl", &l.leadlag.T_lead,
+                                                0.001f, 100.0f, "%.4g",
+                                                ImGuiSliderFlags_Logarithmic);
+            }
+            if (l.leadlag.mode != CompensatorMode::Lead) {
+                ImGui::TextUnformatted("\xce\xb1 lag"); ImGui::SameLine();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                g_changed |= ImGui::SliderFloat("##ag", &l.leadlag.alpha_lag,
+                                                1.01f, 100.0f, "%.4g",
+                                                ImGuiSliderFlags_Logarithmic);
+                ImGui::TextUnformatted("T lag"); ImGui::SameLine();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                g_changed |= ImGui::SliderFloat("##Tg", &l.leadlag.T_lag,
+                                                0.001f, 100.0f, "%.4g",
+                                                ImGuiSliderFlags_Logarithmic);
+            }
+        }
+        if (g_changed) state.needs_recompute = true;
+    } else {
+        ImGui::TextDisabled("select a paired cell to edit its gains");
+    }
+}
 
 void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
     ImGui::Begin("Model Configuration");
@@ -281,23 +560,23 @@ void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
 
     // --- Controller section ---
     ImGui::SeparatorText("Controller");
-    const char* ctrl_types[] = {"None", "State-Space", "Gain Matrix K"};
+    const char* ctrl_types[] = {"None", "PID", "Lead/Lag",
+                                "State-Space", "Gain Matrix K"};
     int ctrl_idx = static_cast<int>(state.ctrl_type);
-    if (ImGui::Combo("Type", &ctrl_idx, ctrl_types, 3)) {
+    if (ImGui::Combo("Type", &ctrl_idx, ctrl_types, 5)) {
         state.ctrl_type = static_cast<ControllerType>(ctrl_idx);
         state.needs_recompute = true;
-        if (state.ctrl_type != ControllerType::None) {
-            state.trace_visible[3] = true;
-            if (state.ctrl_type == ControllerType::StateSpace) {
-                state.trace_visible[1] = true;
-            }
-        } else {
-            state.trace_visible[1] = false;
-            state.trace_visible[3] = false;
-        }
+        const bool lb = state.ctrl_type == ControllerType::PID ||
+                        state.ctrl_type == ControllerType::LeadLag;
+        state.trace_visible[3] = state.ctrl_type != ControllerType::None;
+        state.trace_visible[1] =
+            lb || state.ctrl_type == ControllerType::StateSpace;
     }
 
-    if (state.ctrl_type == ControllerType::StateSpace) {
+    if (state.ctrl_type == ControllerType::PID ||
+        state.ctrl_type == ControllerType::LeadLag) {
+        drawPairingGrid(state);
+    } else if (state.ctrl_type == ControllerType::StateSpace) {
         ImGui::InputText("Ac", state.Ac_text, sizeof(state.Ac_text));
         ImGui::InputText("Bc", state.Bc_text, sizeof(state.Bc_text));
         ImGui::InputText("Cc", state.Cc_text, sizeof(state.Cc_text));

@@ -4,6 +4,7 @@
 #include "linear_system.h"
 #include "analysis/controller_builders.h"
 #include "analysis/frequency_response.h"
+#include "analysis/loop_diagnostics.h"
 #include "analysis/model_library.h"
 #include "analysis/pole_zero.h"
 #include "analysis/system_connect.h"
@@ -93,6 +94,10 @@ struct AppState {
     PropertyResult cl_controllability{};
     PropertyResult cl_observability{};
     std::vector<RootLocusPoint> root_locus;
+
+    // Cached, not recomputed per frame: the structurally-dead-channel test
+    // sweeps the whole Bode grid once per loop.
+    LoopDiagnostics diagnostics;
 
     // --- Physical parameters (mutable copy of current preset's params) ---
     std::vector<PhysicalParam> current_params;

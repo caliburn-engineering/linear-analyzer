@@ -200,6 +200,11 @@ static void render_frame(void* arg) {
             }
         }
 
+        state.diagnostics = caliburn::computeLoopDiagnostics(
+            state.plant, state.loops, state.output_scales,
+            state.diag_omega_hz,
+            state.freq_min_hz, state.freq_max_hz, state.num_freq_points);
+
         for (int s = 0; s < caliburn::NUM_SYSTEMS; ++s) {
             // s == 2 (open-loop combined) is computed for feedbackConnect only.
             if (!state.system_valid[s] || s == 2 || !state.channel_live[s]) {
