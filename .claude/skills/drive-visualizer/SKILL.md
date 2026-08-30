@@ -128,8 +128,15 @@ Combos near the bottom of the window flip their popup upward; move the panel so
 the widget sits mid-height before clicking, or the entry you want will not be
 where you predict.
 
-Killing the app: `pkill -x visualizer`. **Not** `pkill -f build/visualizer` —
-`-f` matches the agent's own shell command line and kills the session.
+**Never use `pkill -f <pattern>` where the pattern appears in your own command
+line** — `-f` matches the agent's shell too, and the session dies mid-task.
+This has happened twice: `pkill -f build/visualizer` and
+`pkill -f "http.server 8731"`. Use an exact process name, or resolve the PID:
+
+```bash
+pkill -x visualizer                                    # exact name
+PID=$(ss -lptn 'sport = :8731' | grep -oP 'pid=\K[0-9]+' | head -1)   # by port
+```
 
 ## Workspaces and scroll traps
 
