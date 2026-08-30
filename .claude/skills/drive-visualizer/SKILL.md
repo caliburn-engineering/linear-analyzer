@@ -8,15 +8,39 @@ description: Launch, focus, click and screenshot the linear-analyzer visualizer 
 Desktop GLFW/OpenGL app. On this machine (Hyprland + Wayland) it is driven with
 `hyprctl` for focus, `ydotool` for input, and `grim` for screenshots.
 
-## Launch
+## Launch — switch to workspace 3 FIRST
 
-Run from the repo root — the app reads `imgui.ini` and `vendor/fonts/` relative to cwd.
+**Workspace 3 is the human's designated Caliburn screen.** Always switch there
+before launching or driving anything, and keep the mouse there. The switch is
+the human's signal that the agent has taken the pointer and they should stop
+interfering; driving the app on whatever workspace happens to be visible means
+fighting them for the mouse and screenshotting their other work.
+
+```bash
+hyprctl dispatch "hl.dsp.send_shortcut({mods='SUPER', key='3'})"   # literally super+3
+sleep 0.5
+hyprctl activeworkspace -j | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])"
+```
+
+Then launch from the repo root — the app reads `imgui.ini` and `vendor/fonts/`
+relative to cwd, and opens on the *active* workspace, so the order matters.
 
 ```bash
 cd projects/linear-analyzer
 setsid ./build/visualizer >/tmp/viz.log 2>&1 &
 sleep 4
 ```
+
+If the app is already running somewhere else, pull it over rather than
+switching away:
+
+```bash
+hyprctl dispatch "hl.dsp.focus({window='address:$A'})"
+hyprctl dispatch "hl.dsp.window.move({workspace='3'})"
+```
+
+Finally park the pointer on workspace 3 (see **Click**) so the human can see at
+a glance that the agent is driving.
 
 ## Find the window
 
@@ -111,9 +135,11 @@ Killing the app: `pkill -x visualizer`. **Not** `pkill -f build/visualizer` —
 
 - **The window may be on another workspace.** `grim` captures the *visible*
   output and `ydotool` clicks land on the *visible* workspace, so a stale
-  window elsewhere means you screenshot someone else's app and click into it.
-  `hl.dsp.focus({window=...})` switches workspace as a side effect, so focus
-  first, then confirm with `hyprctl activewindow -j` before clicking.
+  window elsewhere means you screenshot someone else's app and click into it —
+  this has already put stray clicks into the human's browser once. Switch to
+  workspace 3 first, confirm with `hyprctl activeworkspace -j`, and confirm the
+  focused title with `hyprctl activewindow -j` before the first click.
+  `hl.dsp.focus({window=...})` also switches workspace as a side effect.
 - **ImPlot eats the scroll wheel to zoom.** Scrolling with the cursor over any
   plot zooms that plot instead of scrolling its panel, and there is no undo —
   restart the app. Scroll panels from a non-plot column (the model panel is
