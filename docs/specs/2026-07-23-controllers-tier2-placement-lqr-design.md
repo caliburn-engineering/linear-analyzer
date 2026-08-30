@@ -267,8 +267,24 @@ Before computing LQR:
 For the second-order mass-spring-damper (m=1, b=1.4, k=1):
 - A = [0 1; -1 -1.4], B = [0; 1]
 - Q = I, R = [1]
-- Expected: K ≈ [0.414, 0.318], CL poles ≈ -0.86 ± 0.86j
+- Expected: K ≈ [0.4142135624, 0.5463882256], CL poles ≈ -0.9731941 ± 0.6834521j
 - Cross-check: residual `||A'P + PA - PBR⁻¹B'P + Q|| < 1e-8`
+
+> **Corrected while implementing [#12](https://github.com/caliburn-engineering/caliburn/issues/12).**
+> This spec originally gave K ≈ [0.414, 0.318] with poles ≈ -0.86 ± 0.86j. Those
+> two numbers are inconsistent with each other and with the plant: K = [0.414,
+> 0.318] places the poles at -0.859 ± 0.822j, while poles at -0.86 ± 0.86j
+> require K = [0.479, 0.320]. Neither is the CARE solution.
+>
+> Solving the 2x2 Riccati equation by hand gives `P12 = sqrt(2) - 1` and
+> `P22 = -1.4 + sqrt(0.96 + 2*sqrt(2))`, so `K = [P12, P22]` at R = 1; the
+> stable eigenvalues of the Hamiltonian, computed with no Riccati solver
+> involved, are -0.9731941 ± 0.6834521j. The residual of the corrected P is
+> 5e-16. The first gain component was right, the second was not.
+>
+> Only the residual bound survived unchanged, which is the point the ticket
+> makes about it: it holds against the equation itself rather than against a
+> transcribed number, so it was the one line here that could not go stale.
 
 ## Connection to Existing Code
 
