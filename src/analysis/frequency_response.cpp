@@ -9,6 +9,11 @@ std::complex<double> evalTransferFunction(
     const LinearSystem& sys, int output_i, int input_j,
     std::complex<double> s) {
     int n = sys.states();
+    // n == 0 is a static gain.  ColPivHouseholderQR asserts on a 0x0 matrix in
+    // a debug build; returning D directly is also exactly right.  See issue #5.
+    if (n == 0) {
+        return {sys.D(output_i, input_j), 0.0};
+    }
     Eigen::MatrixXcd sI_A =
         s * Eigen::MatrixXcd::Identity(n, n) -
         sys.A.cast<std::complex<double>>();

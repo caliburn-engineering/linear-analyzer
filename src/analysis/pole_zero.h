@@ -19,6 +19,12 @@ struct RootLocusPoint {
     std::vector<std::complex<double>> poles;
 };
 
+// Reorder `poles` so each entry continues the nearest entry of `prev`.
+// Requires poles.size() == prev.size() — a locus whose pole count changes
+// between points would read prev[i] out of bounds.
+void matchPoles(std::vector<std::complex<double>>& poles,
+                const std::vector<std::complex<double>>& prev);
+
 PoleZeroResult computePoleZero(
     const LinearSystem& sys, int output_i, int input_j);
 

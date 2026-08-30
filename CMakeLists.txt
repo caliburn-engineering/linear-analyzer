@@ -6,6 +6,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Default to an optimized build.  Measured (#10): a 200-point root-locus sweep
+# at 10 closed-loop states costs 321 ms as this repo built before this line,
+# versus 2.4 ms at -O2 -DNDEBUG — and needs_recompute is set from 26 sites
+# including every slider-drag frame.  This makes NDEBUG live, which is only
+# safe once the n == 0 guards in pole_zero/frequency_response exist, so the
+# two land together.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 include(FetchContent)
 
 # --- Eigen ---

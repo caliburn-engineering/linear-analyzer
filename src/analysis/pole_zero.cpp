@@ -6,7 +6,6 @@
 
 namespace caliburn {
 
-namespace {
 void matchPoles(std::vector<std::complex<double>>& poles,
                 const std::vector<std::complex<double>>& prev) {
     int n = static_cast<int>(poles.size());
@@ -28,21 +27,26 @@ void matchPoles(std::vector<std::complex<double>>& poles,
     }
     poles = matched;
 }
-}  // anonymous namespace
 
 PoleZeroResult computePoleZero(
     const LinearSystem& sys, int output_i, int input_j) {
     PoleZeroResult result;
     int n = sys.states();
 
-    // Poles = eigenvalues of A
-    Eigen::EigenSolver<Eigen::MatrixXd> es(sys.A, false);
-    result.poles.resize(n);
+    // Poles = eigenvalues of A.
+    // n == 0 is a static gain: no poles, trivially stable.  Eigen::EigenSolver
+    // on a 0x0 matrix is a real memory fault in BOTH build configs (SIGSEGV
+    // under NDEBUG, SIGABRT in debug) — not a disabled sanity check — so this
+    // guard is a correctness requirement.  See issue #5.
     result.is_stable = true;
-    for (int i = 0; i < n; ++i) {
-        result.poles[i] = es.eigenvalues()(i);
-        if (result.poles[i].real() >= -1e-10) {
-            result.is_stable = false;
+    if (n > 0) {
+        Eigen::EigenSolver<Eigen::MatrixXd> es(sys.A, false);
+        result.poles.resize(n);
+        for (int i = 0; i < n; ++i) {
+            result.poles[i] = es.eigenvalues()(i);
+            if (result.poles[i].real() >= -1e-10) {
+                result.is_stable = false;
+            }
         }
     }
 
@@ -50,12 +54,16 @@ PoleZeroResult computePoleZero(
     double D_ij = sys.D(output_i, input_j);
 
     if (std::abs(D_ij) > 1e-14) {
-        Eigen::MatrixXd A_z = sys.A -
-            sys.B.col(input_j) * sys.C.row(output_i) / D_ij;
-        Eigen::EigenSolver<Eigen::MatrixXd> zes(A_z, false);
-        result.zeros.resize(n);
-        for (int i = 0; i < n; ++i) {
-            result.zeros[i] = zes.eigenvalues()(i);
+        // A static gain has no zeros; leave result.zeros empty rather than
+        // pushing a 0x0 matrix into EigenSolver.  See issue #5.
+        if (n > 0) {
+            Eigen::MatrixXd A_z = sys.A -
+                sys.B.col(input_j) * sys.C.row(output_i) / D_ij;
+            Eigen::EigenSolver<Eigen::MatrixXd> zes(A_z, false);
+            result.zeros.resize(n);
+            for (int i = 0; i < n; ++i) {
+                result.zeros[i] = zes.eigenvalues()(i);
+            }
         }
     } else {
         Eigen::MatrixXd P = Eigen::MatrixXd::Zero(n + 1, n + 1);
@@ -85,6 +93,7 @@ std::vector<RootLocusPoint> computeRootLocus(
     const LinearSystem& sys, int output_i, int input_j,
     double k_min, double k_max, int num_points) {
     int n = sys.states();
+    if (n == 0) return {};
     double D_ij = sys.D(output_i, input_j);
     std::vector<RootLocusPoint> result;
     result.reserve(num_points);
@@ -120,6 +129,7 @@ std::vector<RootLocusPoint> computeStateFeedbackLocus(
     const Eigen::MatrixXd& K,
     double alpha_min, double alpha_max, int num_points) {
     int n = sys.states();
+    if (n == 0) return {};
     std::vector<RootLocusPoint> result;
     result.reserve(num_points);
 
