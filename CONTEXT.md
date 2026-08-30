@@ -84,3 +84,28 @@ returns `eig(A)` as coincident zeros, which reads as full cancellation.
 
 Decided in [#8](https://github.com/caliburn-engineering/caliburn/issues/8) and
 [#9](https://github.com/caliburn-engineering/caliburn/issues/9).
+
+### Pairing grid
+
+The controller section of the model panel: a `p × m` grid of cells, one per
+plant channel, that is **simultaneously the pairing editor and the diagnostic
+readout**. Clicking a cell creates or destroys the loop on that channel; each
+cell shows the RGA `λᵢⱼ` (or the Channel Share, where the RGA is undefined) over
+`|gᵢⱼ|` in dB. A leading column carries the per-output scale.
+
+It is the only editor, so the loop list has no add, remove or reorder controls,
+and grid order *is* loop order. One consequence: an exact duplicate pairing is
+unreachable through the UI, so **#2's duplicate warning needs no surface** —
+though `buildLoopController` still sums duplicates, which is correct for a loop
+list built programmatically.
+
+**Paired-ness is the cell border; severity is the cell fill.** They are separate
+visual channels because a single one cannot carry both, and severity applies to
+RGA cells only — Channel Share is never coloured (see above).
+
+Decided in [#6](https://github.com/caliburn-engineering/caliburn/issues/6).
+
+> **Not the "coupling matrix" or the "RGA table".**
+> The grid outlives the RGA: on a single-input plant the same widget shows
+> Channel Share, and on a 1×1 plant it is one cell with no diagnostic at all.
+> Naming it after one of its readouts hides that it is first an editor.
