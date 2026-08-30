@@ -101,6 +101,7 @@ add_library(analysis_lib STATIC
     src/analysis/system_connect.cpp
     src/analysis/controller_builders.cpp
     src/analysis/loop_diagnostics.cpp
+    src/analysis/loop_locus.cpp
 )
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)

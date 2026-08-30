@@ -1,5 +1,6 @@
 // src/visualizer.cpp
 #include "app_state.h"
+#include "analysis/loop_locus.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -286,16 +287,42 @@ static void render_frame(void* arg) {
                 caliburn::checkObservability(state.systems[3]);
         }
 
-        if (state.pz_mode == caliburn::PZMode::PlantLocus) {
-            state.root_locus = caliburn::computeRootLocus(
-                state.plant, state.output_i, state.input_j,
-                state.rl_k_min, state.rl_k_max, state.rl_num_points);
-        } else if (state.pz_mode == caliburn::PZMode::StateFB &&
-                   state.ctrl_type == caliburn::ControllerType::GainMatrix) {
-            state.root_locus = caliburn::computeStateFeedbackLocus(
-                state.plant, state.ctrl_K,
-                state.rl_alpha_min, state.rl_alpha_max,
-                state.rl_num_points);
+        // Clear on EVERY non-computing path.  Before this, when pz_mode was
+        // StateFB and ctrl_type was not GainMatrix, neither branch ran and
+        // root_locus was never cleared — so the panel kept drawing the PREVIOUS
+        // mode's locus labelled as State FB, with its marker read off
+        // rl_current_alpha.  Clearing here kills that by construction rather
+        // than by a guard.  See issue #10.
+        state.root_locus.clear();
+        state.rl_loop_gain_margin = -1.0;
+        switch (state.pz_mode) {
+            case caliburn::PZMode::PlantLocus:
+                state.root_locus = caliburn::computeRootLocus(
+                    state.plant, state.output_i, state.input_j,
+                    state.rl_k_min, state.rl_k_max, state.rl_num_points);
+                break;
+            case caliburn::PZMode::LoopLocus:
+                if (loop_backed && !state.loops.empty()) {
+                    state.root_locus = caliburn::computeLoopLocus(
+                        state.plant, state.loops, loop_kind,
+                        state.output_i, state.input_j,
+                        state.rl_kappa_min, state.rl_kappa_max,
+                        state.rl_num_points);
+                    state.rl_loop_gain_margin =
+                        caliburn::loopGainMargin(state.root_locus);
+                }
+                break;
+            case caliburn::PZMode::StateFB:
+                if (state.ctrl_type == caliburn::ControllerType::GainMatrix &&
+                    state.ctrl_K.size() > 0) {
+                    state.root_locus = caliburn::computeStateFeedbackLocus(
+                        state.plant, state.ctrl_K,
+                        state.rl_alpha_min, state.rl_alpha_max,
+                        state.rl_num_points);
+                }
+                break;
+            case caliburn::PZMode::PoleZero:
+                break;
         }
     }
 
