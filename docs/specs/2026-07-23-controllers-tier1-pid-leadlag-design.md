@@ -1,5 +1,15 @@
 # Tier 1: PID + Lead/Lag Controllers — Design Spec
 
+> **Superseded in part.** The MIMO half of this spec — `std::vector<PIDParams>`
+> sized by `plant.inputs()`, `buildDiagonalPID`, and the DC-gain coupling
+> heuristic — assumed square plants and does not hold: only 3 of the 6 presets
+> are square, and the one genuinely multivariable preset (Ball-Balancer) has a
+> singular `A`, so `−C·A⁻¹·B + D` is undefined for it. The loop-pairing model
+> replaces it; see `docs/plans/2026-08-30-controllers-tier1-loop-pairing.md`.
+>
+> **Still correct and reused verbatim:** the state-space realization tables for
+> all four PID forms and both Lead/Lag forms.
+
 ## Summary
 
 Replace the current controller dropdown (None / State-Space / Gain Matrix K) with an expanded set of controller types. Tier 1 adds PID (with all sub-combinations) and Lead/Lag compensators. These are dynamic output-feedback controllers that connect via the existing `seriesConnect` + `feedbackConnect` pipeline.
@@ -304,12 +314,43 @@ The rest of the pipeline (seriesConnect → feedbackConnect → analysis) is unc
 
 ## Verification
 
-1. Build: `cmake --build build` — clean compile
-2. Select First-Order preset, PID controller — see Kp/Ki/Kd/τf sliders
-3. Slide Kp — Bode magnitude shifts, closed-loop poles move
-4. Add Ki — steady-state error disappears in step response
-5. Add Kd — overshoot reduces, phase margin improves
-6. Select Lead/Lag, Lead mode — slide α, T — phase lead visible on Bode
-7. Switch to Lag mode — low-frequency gain boost visible
-8. Select a MIMO preset (Quarter-Car), PID — see per-channel sliders + coupling warning
-9. Existing State-Space and Gain Matrix controllers still work unchanged
+1. `cmake --build build && ctest --test-dir build` — clean compile, all suites
+   green including `test_controller_builders` and `test_loop_diagnostics`.
+2. **First-Order** (1×1): pick PID. The grid is a single cell, already paired by
+   the identity seed. Sliding Kp shifts the Bode magnitude and moves the
+   closed-loop pole.
+3. Raise Ki — the step response's steady-state error goes to zero, and the
+   closed-loop pole count rises by one as the integrator state appears.
+4. Raise Kd — overshoot reduces and the phase margin improves.
+5. **The n = 0 path.** Set Ki = Kd = 0 exactly. The controller contributes no
+   states: the closed-loop pole count equals the plant's, the Controller trace
+   is flat at 20·log₁₀(Kp) with no poles plotted, and neither build config
+   faults.
+6. **Lead/Lag** on First-Order: in Lead mode, sweeping α and T shows phase lead;
+   switching to Lag shows the low-frequency gain boost.
+7. **Ball-Balancer** (2×2 — the only genuinely multivariable preset): the seeded
+   identity pairing reads λ = 0.00 on both paired cells and 1.00 on both
+   unpaired ones, with an RGA number of 4.00 at any ω > 0 and a dead-channel
+   warning on each paired cell. Clicking the two off-diagonal cells takes the
+   RGA number to 0.00 and clears the warnings.
+8. **Quarter-Car** (1-input / 2-output — SIMO, *not* MIMO): the grid is a single
+   column and the readout is **Channel Share**, never labelled or coloured as
+   RGA, each row showing the share over |gᵢ| in dB. Sweeping ω from 1 Hz to
+   10 Hz moves the share from `zs` toward `zu` — body bounce to wheel hop.
+   Changing an output scale changes the shares and the headline stops reading
+   "at default".
+9. **Inverted Pendulum** (SIMO): add a second loop into the same input, so both
+   `y0 → u0` and `y1 → u0` are paired — the MISO fan-in. The controller is 1×2,
+   the closed loop is still 2×2, and both compensator channels are live.
+10. **Rule C.** On Quarter-Car with only `y0` paired, selecting Output i = 1
+    suppresses the Controller trace with *"no loop pairs y1 → u0"* rather than
+    drawing a flat 0° phase; setting Reference r = 1 suppresses the closed-loop
+    trace for the matching reason.
+11. **Loop Locus.** On Second-Order with a PID loop, the branches start at
+    κ = 0.01 with the grey reference on the sweep's first point, the marker sits
+    at κ = 1, and the readout gives κ* or *"no crossing in [0.01, 100]"*.
+    Selecting State FB with no K applied clears the plot and states why, rather
+    than redrawing the previous mode's locus.
+12. **Grid mode.** Ball-Balancer with Show All Channels draws two tables — open
+    p×m and loop p×p — and no cell shows another channel's data.
+13. Existing State-Space and Gain Matrix controllers still work unchanged.
