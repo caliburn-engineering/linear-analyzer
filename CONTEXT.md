@@ -1,7 +1,10 @@
-# Linear Analyzer — Context
+# Ball-Balancer — Context
 
-Interactive analysis of linear time-invariant systems: state-space plants, Tier 1
-compensators, and the frequency/time/pole-zero views over them.
+One application over two halves: a 3-RRS table balancing a ball under real
+rolling dynamics, and the analyzer that models a plant, closes a loop around it,
+and shows the consequences across Bode, Nyquist, pole-zero and step-response
+views.  The repository is still named `linear-analyzer` — the merge (issue #13)
+renamed no directory.
 
 ## Glossary
 
@@ -109,3 +112,47 @@ Decided in [#6](https://github.com/caliburn-engineering/caliburn/issues/6).
 > The grid outlives the RGA: on a single-input plant the same widget shows
 > Channel Share, and on a 1×1 plant it is one cell with no diagnostic at all.
 > Naming it after one of its readouts hides that it is first an editor.
+
+### Plate view
+
+The ball-balancer half of the application: the 3-RRS table, the ball on it, the
+3D scene, and the Plate Control / Plate Plots panels.  It owns no window, no
+ImGui context and no main loop — the analyzer's entry point owns all three, and
+reconciling that was the whole of the merge.
+
+Drawn into the **central dock node**, which is deliberately left empty so the
+passthru dockspace shows the scene through it.  A window docked there would
+paint over the plate.
+
+Desktop only.  The Emscripten build compiles the analyzer half alone until the
+web port (issue #15).
+
+### Tilt convention (phi/theta vs alpha/beta)
+
+The two halves name the plate's tilt differently, and the mapping is neither
+identity nor a simple swap:
+
+```
+alpha = -phi        beta = theta
+```
+
+`TableKinematics` uses `R = Ry(theta) * Rx(phi)`, so the plate's local +Y edge
+*rises* with phi while its local +X edge *falls* with theta.
+`RollingBallDynamics` accelerates the ball by `+g*sin(alpha)` along y and
+`+g*sin(beta)` along x.  Theta therefore carries straight through and phi has to
+flip.
+
+A wrong mapping compiles, and still moves the ball — it just rolls uphill.  That
+is why the convention is pinned by `tests/test_ball_sim.cpp` rather than left to
+the eye, and why it lives in one function, `ballTiltFromPose`.
+
+### Plate frame
+
+The ball's state `[x, y, vx, vy]` is expressed in the **plate's own frame**, not
+the world.  Rendering lifts it into the world with the same rotation that places
+the leg attachment points: `p = c + R * (x, y, r_ball)`.
+
+The plate is a **disc**, so the ball leaves it at a radius of
+`R_table - r_ball`.  `RollingBallDynamics::on_plate` tests the inscribed
+*square* and is wrong here; `ballOnPlate` is the test that matches the geometry
+being drawn.

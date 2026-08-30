@@ -1,7 +1,7 @@
 // src/analysis/model_library.h
 #pragma once
 
-#include "../linear_system.h"
+#include "linear_system.h"
 #include <Eigen/Core>
 #include <functional>
 #include <optional>

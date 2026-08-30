@@ -9,10 +9,12 @@
 #endif
 #include <GLFW/glfw3.h>
 #include "imgui.h"
+#include "imgui_internal.h"  // DockBuilder — the first-run layout
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "implot.h"
 
+#include <algorithm>
 #include <cstdio>
 
 #include "panels/model_panel.h"
@@ -22,11 +24,57 @@
 #include "panels/nyquist_panel.h"
 #include "panels/time_response_panel.h"
 
+// The plate half of the application is desktop-only for now.  Its shaders are
+// desktop GLSL and the web port is issue #15; guarding it here keeps the
+// published WASM demo building exactly what it built before the merge.
+#ifndef __EMSCRIPTEN__
+#include "plate_view.h"
+constexpr bool kPlateEnabled = true;
+#else
+constexpr bool kPlateEnabled = false;
+#endif
+
 struct FrameContext {
     GLFWwindow* window;
     caliburn::AppState* state;
     std::vector<caliburn::ModelEntry>* presets;
+#ifndef __EMSCRIPTEN__
+    caliburn::PlateView* plate;
+#endif
 };
+
+// One dockspace for both panel sets.  Built once, and only when ImGui has no
+// layout of its own — a saved imgui.ini always wins, so a user's arrangement
+// survives every restart.
+static void buildDefaultLayout(ImGuiID dock_id, const ImVec2& size) {
+    ImGui::DockBuilderRemoveNode(dock_id);
+    ImGui::DockBuilderAddNode(dock_id, ImGuiDockNodeFlags_DockSpace |
+                                       ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::DockBuilderSetNodeSize(dock_id, size);
+
+    // The central node is deliberately left empty: it is where the 3D plate
+    // shows through the passthru dockspace.
+    ImGuiID centre = dock_id;
+    ImGuiID left   = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left,  0.22f, nullptr, &centre);
+    ImGuiID right  = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.46f, nullptr, &centre);
+    ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down,  0.34f, nullptr, &centre);
+    ImGuiID left_bottom =
+        ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.34f, nullptr, &left);
+
+    ImGui::DockBuilderDockWindow("Model Configuration", left);
+    ImGui::DockBuilderDockWindow("Plate Control", left);
+    ImGui::DockBuilderDockWindow("System Properties", left_bottom);
+
+    ImGui::DockBuilderDockWindow("Bode Plot", right);
+    ImGui::DockBuilderDockWindow("Nyquist Plot", right);
+    ImGui::DockBuilderDockWindow("Pole-Zero / Root Locus", right);
+    ImGui::DockBuilderDockWindow("Time Response", right);
+
+    ImGui::DockBuilderDockWindow("Plate Plots", bottom);
+    ImGui::DockBuilderDockWindow("Model Comparison", bottom);
+
+    ImGui::DockBuilderFinish(dock_id);
+}
 
 static void render_frame(void* arg) {
     auto* ctx = static_cast<FrameContext*>(arg);
@@ -40,8 +88,37 @@ static void render_frame(void* arg) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+#ifndef __EMSCRIPTEN__
+    // After NewFrame, which is what computes io.WantCaptureMouse: the plate
+    // arbitrates its orbit drag on that flag, and stepping earlier read the
+    // previous frame's answer.
+    //
+    // Fixed step, as the plate view has always used: vsync holds the frame rate
+    // at 60 Hz and a fixed step keeps the ball's trajectory reproducible.
+    ctx->plate->step(window, 1.0f / 60.0f);
+#endif
+
     // --- Full-viewport dockspace ---
     ImGuiViewport* vp = ImGui::GetMainViewport();
+    const ImGuiID dock_id = ImGui::GetID("MainDockSpace");
+    static bool layout_checked = false;
+    static int focus_defaults_frames_left = 0;
+    static int place_toggles_frames_left = 0;
+    if (kPlateEnabled && !layout_checked) {
+        layout_checked = true;
+        if (ImGui::DockBuilderGetNode(dock_id) == nullptr) {
+            buildDefaultLayout(dock_id, vp->WorkSize);
+            // DockBuilder decides which tab of a fresh node is on top, and it
+            // does not pick this one.  Windows have to exist before they can be
+            // focused, so the pick is made from the frames that follow.
+            focus_defaults_frames_left = 2;
+            // The central node has no geometry until DockSpace has laid the
+            // fresh layout out, so the toggle bar is placed over the first few
+            // frames rather than pinned to a position that is still (0, 0).
+            place_toggles_frames_left = 4;
+        }
+    }
+
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::SetNextWindowViewport(vp->ID);
@@ -54,7 +131,7 @@ static void render_frame(void* arg) {
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground);
     ImGui::PopStyleVar(3);
-    ImGui::DockSpace(ImGui::GetID("MainDockSpace"), ImVec2(0, 0),
+    ImGui::DockSpace(dock_id, ImVec2(0, 0),
                      ImGuiDockNodeFlags_PassthruCentralNode);
     ImGui::End();
 
@@ -332,6 +409,17 @@ static void render_frame(void* arg) {
     }
 
     // --- Panel toggle bar ---
+    // Floating, and parked in the corner of the central node: anywhere else and
+    // its default position lands on top of the model panel.
+    if (kPlateEnabled && place_toggles_frames_left > 0) {
+        const ImGuiDockNode* centre = ImGui::DockBuilderGetCentralNode(dock_id);
+        if (centre && centre->Size.x > 0.0f) {
+            --place_toggles_frames_left;
+            ImGui::SetNextWindowPos(
+                ImVec2(centre->Pos.x + 12.0f, centre->Pos.y + 12.0f),
+                ImGuiCond_Always);
+        }
+    }
     ImGui::Begin("##toggles", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
                  ImGuiWindowFlags_AlwaysAutoResize);
@@ -358,6 +446,14 @@ static void render_frame(void* arg) {
     caliburn::drawBodePanel(state);
     caliburn::drawNyquistPanel(state);
     caliburn::drawTimeResponsePanel(state);
+#ifndef __EMSCRIPTEN__
+    ctx->plate->drawPanels();
+#endif
+
+    if (kPlateEnabled && focus_defaults_frames_left > 0) {
+        --focus_defaults_frames_left;
+        ImGui::SetWindowFocus("Plate Plots");
+    }
 
     // --- Render ---
     ImGui::Render();
@@ -366,6 +462,30 @@ static void render_frame(void* arg) {
     glViewport(0, 0, fb_w, fb_h);
     glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+
+#ifndef __EMSCRIPTEN__
+    // The 3D scene is drawn into the central dock node rather than the whole
+    // framebuffer, so the plate stays centred in the space the panels leave
+    // rather than hiding behind them.
+    if (const ImGuiDockNode* centre = ImGui::DockBuilderGetCentralNode(dock_id)) {
+        const float sx = fb_w / std::max(vp->Size.x, 1.0f);
+        const float sy = fb_h / std::max(vp->Size.y, 1.0f);
+        const int cx = static_cast<int>((centre->Pos.x - vp->Pos.x) * sx);
+        const int cy = static_cast<int>(
+            (vp->Pos.y + vp->Size.y - (centre->Pos.y + centre->Size.y)) * sy);
+        const int cw = static_cast<int>(centre->Size.x * sx);
+        const int ch = static_cast<int>(centre->Size.y * sy);
+        if (cw > 0 && ch > 0) {
+            glViewport(cx, cy, cw, ch);
+            glClear(GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            ctx->plate->drawScene(static_cast<float>(cw) / static_cast<float>(ch));
+            glDisable(GL_DEPTH_TEST);
+            glViewport(0, 0, fb_w, fb_h);
+        }
+    }
+#endif
+
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
 }
@@ -390,7 +510,9 @@ int main() {
 
     GLFWwindow* window = glfwCreateWindow(
         1600, 1000,
-        "Linear System Analyzer \xe2\x80\x94 Caliburn", nullptr, nullptr);
+        kPlateEnabled ? "Ball-Balancer \xe2\x80\x94 Caliburn"
+                      : "Linear System Analyzer \xe2\x80\x94 Caliburn",
+        nullptr, nullptr);
     if (!window) { glfwTerminate(); return 1; }
 
     glfwMakeContextCurrent(window);
@@ -441,6 +563,13 @@ int main() {
     style.FrameRounding = 4.0f;
     style.GrabRounding = 4.0f;
 
+#ifndef __EMSCRIPTEN__
+    // Constructed before the ImGui backend so that its scroll callback is the
+    // *previous* one, which the backend chains to instead of replacing.
+    caliburn::PlateView plate;
+    plate.attach(window);
+#endif
+
     ImGui_ImplGlfw_InitForOpenGL(window, true);
 #ifdef __EMSCRIPTEN__
     ImGui_ImplOpenGL3_Init("#version 300 es");
@@ -461,21 +590,29 @@ int main() {
 
 #ifndef __EMSCRIPTEN__
     glEnable(GL_MULTISAMPLE);
+    glEnable(GL_LINE_SMOOTH);
+    plate.initGL();
 #endif
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     // --- Main loop ---
-    FrameContext ctx{window, &state, &presets};
 #ifdef __EMSCRIPTEN__
+    FrameContext ctx{window, &state, &presets};
     emscripten_set_main_loop_arg(render_frame, &ctx, 0, true);
 #else
+    FrameContext ctx{window, &state, &presets, &plate};
     while (!glfwWindowShouldClose(window)) {
         render_frame(&ctx);
     }
 #endif
 
     // --- Cleanup ---
+#ifndef __EMSCRIPTEN__
+    // Before the context goes away: ~LineRenderer calls glDeleteBuffers, and
+    // running that after glfwTerminate is undefined.
+    plate.shutdownGL();
+#endif
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImPlot::DestroyContext();
