@@ -7,5 +7,7 @@
 namespace caliburn {
 
 void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets);
+void extractTFFromSS(AppState& state);
+void applyTFToSS(AppState& state);
 
 }  // namespace caliburn

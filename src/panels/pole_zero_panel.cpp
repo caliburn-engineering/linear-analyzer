@@ -1,5 +1,6 @@
 // src/panels/pole_zero_panel.cpp
 #include "pole_zero_panel.h"
+#include "panel_utils.h"
 #include "implot.h"
 #include <cmath>
 
@@ -8,6 +9,21 @@ namespace caliburn {
 void drawPoleZeroPanel(AppState& state) {
     if (!state.show_pole_zero) return;
     ImGui::Begin("Pole-Zero / Root Locus", &state.show_pole_zero);
+    drawHelpMarker(
+        "Pole-Zero / Root Locus Plot\n\n"
+        "Poles (x) are roots of det(sI - A) = 0.\n"
+        "Zeros (o) are transmission zeros.\n\n"
+        "Stability: All poles must be in the left half-plane (Re < 0).\n"
+        "Green shading = stable region.\n\n"
+        "Pole location:\n"
+        "  Real part: decay/growth rate\n"
+        "  Imag part: oscillation frequency\n"
+        "  Distance from origin: speed of response\n"
+        "  Angle from neg. real axis: damping ratio\n\n"
+        "Root Locus: Poles move as gain K varies.\n"
+        "Start at OL poles (K=0), end at OL zeros (K->inf).\n"
+        "Unstable when a locus crosses into the right half-plane.");
+    ImGui::SameLine();
 
     // Mode selector
     int mode = static_cast<int>(state.pz_mode);
@@ -21,28 +37,78 @@ void drawPoleZeroPanel(AppState& state) {
 
     // Root locus controls
     if (state.pz_mode == PZMode::UnityFB) {
-        ImGui::SliderFloat("K", &state.rl_current_k,
-                           state.rl_k_min, state.rl_k_max, "%.2f",
-                           ImGuiSliderFlags_Logarithmic);
-        if (ImGui::SliderFloat("K min", &state.rl_k_min, 0.0f, 1.0f)) {
-            state.needs_recompute = true;
-        }
-        ImGui::SameLine();
-        if (ImGui::SliderFloat("K max", &state.rl_k_max, 1.0f, 1000.0f)) {
-            state.needs_recompute = true;
+        if (ImGui::BeginTable("##rl_ctrls", 3)) {
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("K"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::SliderFloat("##K", &state.rl_current_k,
+                               state.rl_k_min, state.rl_k_max, "%.2f",
+                               ImGuiSliderFlags_Logarithmic);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("K min"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::SliderFloat("##Kmin", &state.rl_k_min, 0.0f, 1.0f))
+                state.needs_recompute = true;
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("K max"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::SliderFloat("##Kmax", &state.rl_k_max, 1.0f, 1000.0f))
+                state.needs_recompute = true;
+            ImGui::EndTable();
         }
     } else if (state.pz_mode == PZMode::StateFB) {
-        ImGui::SliderFloat("\xce\xb1", &state.rl_current_alpha,
-                           state.rl_alpha_min, state.rl_alpha_max);
-        if (ImGui::SliderFloat("\xce\xb1 max", &state.rl_alpha_max, 0.1f, 10.0f)) {
-            state.needs_recompute = true;
+        if (ImGui::BeginTable("##sfb_ctrls", 2)) {
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("\xce\xb1"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::SliderFloat("##alpha", &state.rl_current_alpha,
+                               state.rl_alpha_min, state.rl_alpha_max);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("\xce\xb1 max"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::SliderFloat("##alphamax", &state.rl_alpha_max, 0.1f, 10.0f))
+                state.needs_recompute = true;
+            ImGui::EndTable();
         }
+    }
+
+    // Compute axis limits from visible data (mode-dependent)
+    double pz_xmin = 0, pz_xmax = 0, pz_ymin = 0, pz_ymax = 0;
+    bool pz_has_data = false;
+    auto pz_extend = [&](double re, double im) {
+        if (!pz_has_data) { pz_xmin = pz_xmax = re; pz_ymin = pz_ymax = im; pz_has_data = true; }
+        else { pz_xmin = std::min(pz_xmin, re); pz_xmax = std::max(pz_xmax, re);
+               pz_ymin = std::min(pz_ymin, im); pz_ymax = std::max(pz_ymax, im); }
+    };
+    if (state.pz_mode == PZMode::PoleZero) {
+        for (int s = 0; s < NUM_SYSTEMS; ++s) {
+            if (!state.trace_visible[s] || !state.system_valid[s]) continue;
+            for (const auto& p : state.pole_zero[s].poles) pz_extend(p.real(), p.imag());
+            for (const auto& z : state.pole_zero[s].zeros) pz_extend(z.real(), z.imag());
+        }
+    } else {
+        for (const auto& step : state.root_locus)
+            for (const auto& p : step.poles) pz_extend(p.real(), p.imag());
+        if (state.system_valid[0])
+            for (const auto& p : state.pole_zero[0].poles) pz_extend(p.real(), p.imag());
+    }
+    if (!pz_has_data) { pz_xmin = -2; pz_xmax = 2; pz_ymin = -2; pz_ymax = 2; }
+    {
+        double mx = std::max((pz_xmax - pz_xmin) * 0.15, 0.5);
+        double my = std::max((pz_ymax - pz_ymin) * 0.15, 0.5);
+        pz_xmin -= mx; pz_xmax += mx; pz_ymin -= my; pz_ymax += my;
+        pz_xmin = std::min(pz_xmin, -1.0);
+        pz_xmax = std::max(pz_xmax, 1.0);
     }
 
     // Plot
     ImVec2 avail = ImGui::GetContentRegionAvail();
     if (ImPlot::BeginPlot("##pz_plot", avail, ImPlotFlags_Equal)) {
-        ImPlot::SetupAxes("\xcf\x83 (Real)", "j\xcf\x89 (Imag)");
+        ImPlot::SetupAxes("\xcf\x83 (Real)", "j\xcf\x89 (Imag)",
+                          ImPlotAxisFlags_NoGridLines,
+                          ImPlotAxisFlags_NoGridLines);
+        ImPlot::SetupAxisLimits(ImAxis_X1, pz_xmin, pz_xmax, ImPlotCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, pz_ymin, pz_ymax, ImPlotCond_Always);
 
         // Stable region shading (Re < 0)
         {
@@ -60,19 +126,15 @@ void drawPoleZeroPanel(AppState& state) {
                              ImPlotSpec(ImPlotProp_LineColor,
                                         ImVec4(1, 1, 1, 0.16f)));
 
-        // Unit circle
-        {
-            constexpr int N = 128;
-            double cx[N + 1], cy[N + 1];
-            for (int i = 0; i <= N; ++i) {
-                double th = 2.0 * M_PI * i / N;
-                cx[i] = std::cos(th);
-                cy[i] = std::sin(th);
-            }
-            ImPlot::PlotLine("##unit_circle", cx, cy, N + 1,
+        // Real axis
+        ImPlot::PlotInfLines("##sigma_axis", &zero, 1,
                              ImPlotSpec(ImPlotProp_LineColor,
-                                        ImVec4(1, 1, 1, 0.12f)));
-        }
+                                        ImVec4(1, 1, 1, 0.16f),
+                                        ImPlotProp_Flags,
+                                        (int)ImPlotInfLinesFlags_Horizontal));
+
+        // S-plane grid (wn circles + zeta lines)
+        drawSPlaneGrid();
 
         if (state.pz_mode == PZMode::PoleZero) {
             for (int s = 0; s < NUM_SYSTEMS; ++s) {

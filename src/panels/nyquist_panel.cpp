@@ -1,5 +1,6 @@
 // src/panels/nyquist_panel.cpp
 #include "nyquist_panel.h"
+#include "panel_utils.h"
 #include "implot.h"
 #include <cmath>
 
@@ -8,10 +9,52 @@ namespace caliburn {
 void drawNyquistPanel(AppState& state) {
     if (!state.show_nyquist) return;
     ImGui::Begin("Nyquist Plot", &state.show_nyquist);
+    drawHelpMarker(
+        "Nyquist Plot\n\n"
+        "Plots G(jw) in the complex plane as w varies 0 to inf.\n\n"
+        "Nyquist Stability Criterion:\n"
+        "CL unstable poles = OL unstable poles + clockwise\n"
+        "encirclements of the critical point (-1, 0).\n\n"
+        "Features:\n"
+        "  (-1, 0): Red circle. Passing through = marginal stability.\n"
+        "  Solid curve: Positive frequencies (w > 0).\n"
+        "  Faded curve: Mirror for negative frequencies.\n"
+        "  Arrows: Direction of increasing frequency.\n"
+        "  Hover: Shows frequency at that curve point.\n\n"
+        "Distance from (-1,0) relates to gain/phase margins.");
+
+    // Compute axis limits from Nyquist data + critical point
+    double nq_xmin = -1.0, nq_xmax = 0.0, nq_ymin = 0.0, nq_ymax = 0.0;
+    bool nq_has = false;
+    for (int s = 0; s < NUM_SYSTEMS; ++s) {
+        if (!state.trace_visible[s] || !state.system_valid[s]) continue;
+        for (const auto& c : state.bode[s].nyquist) {
+            double re = c.real(), im = c.imag();
+            if (!nq_has) { nq_xmin = nq_xmax = re; nq_ymin = std::min(im, -im); nq_ymax = std::max(im, -im); nq_has = true; }
+            else { nq_xmin = std::min(nq_xmin, re); nq_xmax = std::max(nq_xmax, re);
+                   nq_ymin = std::min({nq_ymin, im, -im}); nq_ymax = std::max({nq_ymax, im, -im}); }
+        }
+    }
+    nq_xmin = std::min(nq_xmin, -1.0);  // always include critical point
+    if (!nq_has) { nq_xmin = -2; nq_xmax = 2; nq_ymin = -2; nq_ymax = 2; }
+    {
+        double mx = std::max((nq_xmax - nq_xmin) * 0.1, 0.2);
+        double my = std::max((nq_ymax - nq_ymin) * 0.1, 0.2);
+        nq_xmin -= mx; nq_xmax += mx; nq_ymin -= my; nq_ymax += my;
+        nq_xmin = std::min(nq_xmin, -1.0);
+        nq_xmax = std::max(nq_xmax, 1.0);
+    }
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
     if (ImPlot::BeginPlot("##nyquist", avail, ImPlotFlags_Equal)) {
-        ImPlot::SetupAxes("Re{G(j\xcf\x89)}", "Im{G(j\xcf\x89)}");
+        ImPlot::SetupAxes("Re{G(j\xcf\x89)}", "Im{G(j\xcf\x89)}",
+                          ImPlotAxisFlags_NoGridLines,
+                          ImPlotAxisFlags_NoGridLines);
+        ImPlot::SetupAxisLimits(ImAxis_X1, nq_xmin, nq_xmax, ImPlotCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, nq_ymin, nq_ymax, ImPlotCond_Always);
+
+        // Polar grid (concentric circles + radial lines)
+        drawPolarGrid();
 
         // Critical point (-1, 0)
         {
@@ -51,12 +94,30 @@ void drawNyquistPanel(AppState& state) {
                              ImPlotSpec(ImPlotProp_LineColor, col_dim,
                                         ImPlotProp_LineWeight, 1.5f));
 
-            for (int k = 0; k < n; k += std::max(n / 10, 1)) {
-                ImPlot::PlotScatter("##arr", &re[k], &im[k], 1,
-                                    ImPlotSpec(ImPlotProp_Marker, ImPlotMarker_Right,
-                                               ImPlotProp_MarkerSize, 4.0f,
-                                               ImPlotProp_MarkerFillColor, system_colors[s],
-                                               ImPlotProp_LineWeight, 1.0f));
+            // Direction arrows along curve
+            int step = std::max(n / 10, 1);
+            ImDrawList* dl = ImPlot::GetPlotDrawList();
+            ImU32 arrow_col = system_colors_u32[s];
+            for (int k = step / 2; k < n - 1; k += step) {
+                // Use points a few indices apart for a stable direction
+                int ka = std::max(k - 2, 0);
+                int kb = std::min(k + 2, n - 1);
+                ImVec2 pa = ImPlot::PlotToPixels(ImPlotPoint(re[ka], im[ka]));
+                ImVec2 pb = ImPlot::PlotToPixels(ImPlotPoint(re[kb], im[kb]));
+                float pdx = pb.x - pa.x;
+                float pdy = pb.y - pa.y;
+                float plen = std::sqrt(pdx * pdx + pdy * pdy);
+                if (plen < 4.0f) continue;
+
+                // Unit direction and perpendicular in pixel space
+                float ux = pdx / plen, uy = pdy / plen;
+                ImVec2 tip = ImPlot::PlotToPixels(ImPlotPoint(re[k], im[k]));
+                float sz = 7.0f;
+                ImVec2 a1(tip.x - ux * sz * 2.5f + uy * sz,
+                          tip.y - uy * sz * 2.5f - ux * sz);
+                ImVec2 a2(tip.x - ux * sz * 2.5f - uy * sz,
+                          tip.y - uy * sz * 2.5f + ux * sz);
+                dl->AddTriangleFilled(tip, a1, a2, arrow_col);
             }
         }
 

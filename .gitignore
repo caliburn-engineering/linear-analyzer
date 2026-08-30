@@ -3,3 +3,4 @@ build/
 .cache/
 imgui.ini
 compile_commands.json
+build-web/

@@ -19,20 +19,24 @@ set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(eigen)
 
-# --- GLFW ---
-FetchContent_Declare(glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG        3.4
-    GIT_SHALLOW    TRUE
-)
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(glfw)
+# --- GLFW (desktop only — Emscripten provides its own via -sUSE_GLFW=3) ---
+if(NOT EMSCRIPTEN)
+    FetchContent_Declare(glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG        3.4
+        GIT_SHALLOW    TRUE
+    )
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(glfw)
+endif()
 
-# --- GLAD (vendored) ---
-add_library(glad STATIC vendor/glad/src/glad.c)
-target_include_directories(glad PUBLIC vendor/glad/include)
+# --- GLAD (desktop only — Emscripten provides GL headers) ---
+if(NOT EMSCRIPTEN)
+    add_library(glad STATIC vendor/glad/src/glad.c)
+    target_include_directories(glad PUBLIC vendor/glad/include)
+endif()
 
 # --- ImGui ---
 FetchContent_Declare(imgui
@@ -54,8 +58,13 @@ target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui PUBLIC glfw glad)
-target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD)
+if(EMSCRIPTEN)
+    # USE_GLFW=3 provides GLFW headers via Emscripten ports (compile-time warning is harmless)
+    target_compile_options(imgui PUBLIC -sUSE_GLFW=3)
+else()
+    target_link_libraries(imgui PUBLIC glfw glad)
+    target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD)
+endif()
 
 # --- ImPlot ---
 FetchContent_Declare(implot
@@ -71,7 +80,7 @@ add_library(implot STATIC
 target_include_directories(implot PUBLIC ${implot_SOURCE_DIR})
 target_link_libraries(implot PUBLIC imgui)
 
-# --- Analysis library (sources added incrementally) ---
+# --- Analysis library ---
 add_library(analysis_lib STATIC
     src/rk4.cpp
     src/analysis/model_library.cpp
@@ -84,41 +93,42 @@ add_library(analysis_lib STATIC
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
 
-# --- Tests ---
-enable_testing()
+# --- Tests (desktop only) ---
+if(NOT EMSCRIPTEN)
+    enable_testing()
 
-add_executable(test_model_library tests/test_model_library.cpp)
-target_link_libraries(test_model_library PRIVATE analysis_lib)
-target_include_directories(test_model_library PRIVATE tests)
-add_test(NAME test_model_library COMMAND test_model_library)
+    add_executable(test_model_library tests/test_model_library.cpp)
+    target_link_libraries(test_model_library PRIVATE analysis_lib)
+    target_include_directories(test_model_library PRIVATE tests)
+    add_test(NAME test_model_library COMMAND test_model_library)
 
-add_executable(test_system_properties tests/test_system_properties.cpp)
-target_link_libraries(test_system_properties PRIVATE analysis_lib)
-target_include_directories(test_system_properties PRIVATE tests)
-add_test(NAME test_system_properties COMMAND test_system_properties)
+    add_executable(test_system_properties tests/test_system_properties.cpp)
+    target_link_libraries(test_system_properties PRIVATE analysis_lib)
+    target_include_directories(test_system_properties PRIVATE tests)
+    add_test(NAME test_system_properties COMMAND test_system_properties)
 
-add_executable(test_frequency_response tests/test_frequency_response.cpp)
-target_link_libraries(test_frequency_response PRIVATE analysis_lib)
-target_include_directories(test_frequency_response PRIVATE tests)
-add_test(NAME test_frequency_response COMMAND test_frequency_response)
+    add_executable(test_frequency_response tests/test_frequency_response.cpp)
+    target_link_libraries(test_frequency_response PRIVATE analysis_lib)
+    target_include_directories(test_frequency_response PRIVATE tests)
+    add_test(NAME test_frequency_response COMMAND test_frequency_response)
 
-add_executable(test_pole_zero tests/test_pole_zero.cpp)
-target_link_libraries(test_pole_zero PRIVATE analysis_lib)
-target_include_directories(test_pole_zero PRIVATE tests)
-add_test(NAME test_pole_zero COMMAND test_pole_zero)
+    add_executable(test_pole_zero tests/test_pole_zero.cpp)
+    target_link_libraries(test_pole_zero PRIVATE analysis_lib)
+    target_include_directories(test_pole_zero PRIVATE tests)
+    add_test(NAME test_pole_zero COMMAND test_pole_zero)
 
-add_executable(test_time_response tests/test_time_response.cpp)
-target_link_libraries(test_time_response PRIVATE analysis_lib)
-target_include_directories(test_time_response PRIVATE tests)
-add_test(NAME test_time_response COMMAND test_time_response)
+    add_executable(test_time_response tests/test_time_response.cpp)
+    target_link_libraries(test_time_response PRIVATE analysis_lib)
+    target_include_directories(test_time_response PRIVATE tests)
+    add_test(NAME test_time_response COMMAND test_time_response)
 
-add_executable(test_system_connect tests/test_system_connect.cpp)
-target_link_libraries(test_system_connect PRIVATE analysis_lib)
-target_include_directories(test_system_connect PRIVATE tests)
-add_test(NAME test_system_connect COMMAND test_system_connect)
+    add_executable(test_system_connect tests/test_system_connect.cpp)
+    target_link_libraries(test_system_connect PRIVATE analysis_lib)
+    target_include_directories(test_system_connect PRIVATE tests)
+    add_test(NAME test_system_connect COMMAND test_system_connect)
+endif()
 
 # --- Visualizer executable ---
-find_package(OpenGL REQUIRED)
 add_executable(visualizer
     src/visualizer.cpp
     src/panels/model_panel.cpp
@@ -128,11 +138,27 @@ add_executable(visualizer
     src/panels/nyquist_panel.cpp
     src/panels/time_response_panel.cpp
 )
-target_link_libraries(visualizer PRIVATE
-    analysis_lib
-    imgui
-    implot
-    glad
-    glfw
-    OpenGL::GL
-)
+
+if(EMSCRIPTEN)
+    target_link_libraries(visualizer PRIVATE analysis_lib imgui implot)
+    target_link_options(visualizer PRIVATE
+        -sUSE_GLFW=3
+        -sUSE_WEBGL2=1
+        -sFULL_ES3=1
+        -sALLOW_MEMORY_GROWTH=1
+        -sMAX_WEBGL_VERSION=2
+        --preload-file ${CMAKE_SOURCE_DIR}/vendor/fonts/NotoSans-Regular.ttf@vendor/fonts/NotoSans-Regular.ttf
+        --shell-file ${CMAKE_SOURCE_DIR}/web/shell.html
+    )
+    set_target_properties(visualizer PROPERTIES SUFFIX ".html")
+else()
+    find_package(OpenGL REQUIRED)
+    target_link_libraries(visualizer PRIVATE
+        analysis_lib
+        imgui
+        implot
+        glad
+        glfw
+        OpenGL::GL
+    )
+endif()
