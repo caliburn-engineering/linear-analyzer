@@ -313,8 +313,13 @@ static void drawPairingGrid(AppState& state) {
     // area and assuming it grades their pairing.
     ImGui::TextWrapped("%s", state.diagnostics.headline.c_str());
     if (state.diagnostics.has_share) {
-        ImGui::TextDisabled(
+        // Wrapped, not TextDisabled: at the panel's real 354 px this sentence
+        // truncates mid-word, and it is the load-bearing negative — the whole
+        // point is that a user must not read it as a pairing grade.
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+        ImGui::TextWrapped(
             "Channel Share is not the RGA and does not grade the pairing.");
+        ImGui::PopStyleColor();
     }
 
     // Gain block for the selected loop, full width, below the grid.

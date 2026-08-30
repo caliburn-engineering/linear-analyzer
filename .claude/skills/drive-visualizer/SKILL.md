@@ -88,3 +88,21 @@ mostly plots you are not checking. Then read the PNG.
 - Watch for **C++ hex-escape greediness** in UI strings: `"\xcf\x84f"` is parsed
   as `\xcf` then `\x84f` (out of range), not `tau` + `f`. Split the literal:
   `"\xcf\x84" "f"`.
+
+## Click discipline
+
+**Screenshot the region first, locate the widget, then click.** The model panel
+scrolls, so a coordinate that was a combo box a moment ago can be a matrix
+slider now — and a stray click on a `SliderFloat` silently edits the plant.
+If a value looks wrong afterwards, restart the app rather than trying to undo.
+
+Scrolling: `ydotool mousemove -w -x 0 -y -12` scrolls **down**, positive `-y`
+scrolls up. `ydotool mousemove -a` does **not** work on this machine — the
+cursor does not move — which is why focus uses `hl.dsp.cursor.move`.
+
+Combos near the bottom of the window flip their popup upward; move the panel so
+the widget sits mid-height before clicking, or the entry you want will not be
+where you predict.
+
+Killing the app: `pkill -x visualizer`. **Not** `pkill -f build/visualizer` —
+`-f` matches the agent's own shell command line and kills the session.
