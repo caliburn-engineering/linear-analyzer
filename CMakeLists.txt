@@ -102,6 +102,7 @@ add_library(analysis_lib STATIC
     src/analysis/controller_builders.cpp
     src/analysis/loop_diagnostics.cpp
     src/analysis/loop_locus.cpp
+    src/analysis/lqr.cpp
 )
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
@@ -149,6 +150,11 @@ if(NOT EMSCRIPTEN)
     target_link_libraries(test_loop_diagnostics PRIVATE analysis_lib)
     target_include_directories(test_loop_diagnostics PRIVATE tests)
     add_test(NAME test_loop_diagnostics COMMAND test_loop_diagnostics)
+
+    add_executable(test_lqr tests/test_lqr.cpp)
+    target_link_libraries(test_lqr PRIVATE analysis_lib)
+    target_include_directories(test_lqr PRIVATE tests)
+    add_test(NAME test_lqr COMMAND test_lqr)
 endif()
 
 # --- Visualizer executable ---
