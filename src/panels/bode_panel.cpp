@@ -340,9 +340,9 @@ void drawBodePanel(AppState& state) {
         // actually closed.  systems[2] stays excluded from Bode, as today.
         const int open_systems[2] = {0, 1};
         const int loop_systems[1] = {3};
-        drawGrid("open", "Open channels  (y_i \xe2\x86\x90 u_j)", p, m,
+        drawGrid("open", "Open channels  (y_i <- u_j)", p, m,
                  open_systems, 2);
-        drawGrid("loop", "Loop channels  (y_i \xe2\x86\x90 r_j)", p, p,
+        drawGrid("loop", "Loop channels  (y_i <- r_j)", p, p,
                  loop_systems, 1);
     } else {
         // Determine which system to show margins for

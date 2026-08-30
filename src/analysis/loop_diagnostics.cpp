@@ -143,6 +143,18 @@ LoopDiagnostics computeLoopDiagnostics(const LinearSystem& plant,
         return d;
     }
 
+    // A share over a single output is 1.0 by construction and says nothing, so
+    // a 1-output plant gets no diagnostic at all — one cell, the |g| readout
+    // only.  This is the glossary's "on a 1x1 plant it is one cell with no
+    // diagnostic at all"; the same reasoning that makes a 1x1 RGA vacuous.
+    if (p < 2) {
+        char buf[192];
+        std::snprintf(buf, sizeof(buf),
+                      "Single output \xe2\x80\x94 no pairing diagnostic applies");
+        d.headline = buf;
+        return d;
+    }
+
     // Channel Share.  Not a pairing measure; never coloured or thresholded as
     // one.  lambda_i = |g_i|^2 / sum|g_k|^2 against the user's output scales.
     d.has_share = true;

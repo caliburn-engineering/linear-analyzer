@@ -186,7 +186,7 @@ static void render_frame(void* arg) {
             if (!loopOn(state.output_i, state.input_j)) {
                 state.channel_live[1] = false;
                 std::snprintf(reason, sizeof(reason),
-                              "no loop pairs y%d \xe2\x86\x92 u%d",
+                              "no loop pairs y%d -> u%d",
                               state.output_i, state.input_j);
                 state.channel_reason[1] = reason;
             }

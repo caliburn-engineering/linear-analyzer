@@ -142,7 +142,7 @@ static void drawPairingGrid(AppState& state) {
     const int gm = state.plant.inputs();
     const auto& diag = state.diagnostics;
 
-    ImGui::TextDisabled("click to pair or select; click the selected cell to unpair");
+    ImGui::TextDisabled("left-click to pair / select \xe2\x80\xa2 right-click to unpair");
 
     // Columns: per-output scale, row label, then one cell per plant input.
     // The scale column supersedes a collapsed "scales: default (1, 1)" status
@@ -230,37 +230,50 @@ static void drawPairingGrid(AppState& state) {
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,
                                     paired ? 2.0f : 0.0f);
 
-                // One button, three outcomes, so a single click can both
-                // select a loop for editing and still be the unpair
-                // affordance:
-                //   unpaired            -> pair it and select it
-                //   paired, not current -> select it (gains below)
-                //   paired, current     -> unpair it
-                // The prototype only had the first and third, which left an
-                // existing loop's gains unreachable without unpairing it first.
+                // LEFT click is always non-destructive: it pairs an unpaired
+                // cell (and selects it), or selects an already-paired one so
+                // its gains appear below.  RIGHT click unpairs.
+                //
+                // Issue #6 specified a pure toggle — click to pair, click again
+                // to unpair — which leaves an existing loop's gains unreachable
+                // without destroying the loop first.  Overloading the same
+                // button with "unpair if this one is already selected" fixes
+                // that but makes whether a click destroys depend on hidden
+                // state; it was mis-predicted repeatedly in testing.  Giving
+                // destruction its own gesture keeps "click a cell to pair"
+                // true and makes no left-click ever lose a tuning.
                 if (ImGui::Button(cell, ImVec2(-FLT_MIN, 34))) {
                     if (!paired) {
                         state.loops.push_back(Loop{i, j, {}, {}});
                         state.selected_loop =
                             static_cast<int>(state.loops.size()) - 1;
                         state.needs_recompute = true;
-                    } else if (state.selected_loop != found) {
-                        state.selected_loop = found;
                     } else {
-                        state.loops.erase(state.loops.begin() + found);
-                        state.selected_loop = state.loops.empty() ? -1 : 0;
-                        state.needs_recompute = true;
+                        state.selected_loop = found;
                     }
+                }
+                if (paired && ImGui::IsItemHovered() &&
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    state.loops.erase(state.loops.begin() + found);
+                    state.selected_loop = -1;
+                    state.needs_recompute = true;
                 }
 
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(2);
 
+                // Dead-channel marker, drawn INTO the cell's top-right rather
+                // than with SameLine: the button is full column width, so a
+                // SameLine marker lands past the column edge and is clipped by
+                // the next column — visible only in the last column.
                 if (paired &&
                     found < static_cast<int>(diag.loop_dead.size()) &&
                     diag.loop_dead[found]) {
-                    ImGui::SameLine(0, 2);
-                    ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "!");
+                    const ImVec2 mn = ImGui::GetItemRectMin();
+                    const ImVec2 mx = ImGui::GetItemRectMax();
+                    ImGui::GetWindowDrawList()->AddText(
+                        ImVec2(mx.x - 11.0f, mn.y + 1.0f),
+                        IM_COL32(255, 90, 90, 255), "!");
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(
                             "u%d does not affect y%d at any frequency", j, i);
@@ -309,7 +322,7 @@ static void drawPairingGrid(AppState& state) {
         state.selected_loop < static_cast<int>(state.loops.size())) {
         Loop& l = state.loops[state.selected_loop];
         char hdr[64];
-        std::snprintf(hdr, sizeof(hdr), "Gains  y%d \xe2\x86\x90 u%d",
+        std::snprintf(hdr, sizeof(hdr), "Gains  y%d <- u%d",
                       l.out, l.in);
         ImGui::SeparatorText(hdr);
 
@@ -323,7 +336,7 @@ static void drawPairingGrid(AppState& state) {
             g_changed |= gainSliderPiecewise("##Ki", &l.pid.Ki, 50.0f);
             ImGui::TextUnformatted("Kd"); ImGui::SameLine();
             g_changed |= gainSliderPiecewise("##Kd", &l.pid.Kd, 20.0f);
-            ImGui::TextUnformatted("\xcf\x84f"); ImGui::SameLine();
+            ImGui::TextUnformatted("\xcf\x84" "f"); ImGui::SameLine();
             ImGui::SetNextItemWidth(-FLT_MIN);
             g_changed |= ImGui::SliderFloat("##tauf", &l.pid.tau_f,
                                             0.001f, 1.0f, "%.4g",
