@@ -100,6 +100,7 @@ add_library(analysis_lib STATIC
     src/analysis/time_response.cpp
     src/analysis/system_connect.cpp
     src/analysis/controller_builders.cpp
+    src/analysis/loop_diagnostics.cpp
 )
 target_include_directories(analysis_lib PUBLIC src)
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
@@ -142,6 +143,11 @@ if(NOT EMSCRIPTEN)
     target_link_libraries(test_controller_builders PRIVATE analysis_lib)
     target_include_directories(test_controller_builders PRIVATE tests)
     add_test(NAME test_controller_builders COMMAND test_controller_builders)
+
+    add_executable(test_loop_diagnostics tests/test_loop_diagnostics.cpp)
+    target_link_libraries(test_loop_diagnostics PRIVATE analysis_lib)
+    target_include_directories(test_loop_diagnostics PRIVATE tests)
+    add_test(NAME test_loop_diagnostics COMMAND test_loop_diagnostics)
 endif()
 
 # --- Visualizer executable ---
