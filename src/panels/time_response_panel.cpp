@@ -55,11 +55,11 @@ void drawTimeResponsePanel(AppState& state) {
         if (ImGui::SliderFloat("##dur", &state.duration, 1.0f, 30.0f))
             state.needs_recompute = true;
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted("Input ch"); ImGui::SameLine();
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::SliderInt("##inch", &state.time_input_j, 0,
-                             std::max(state.plant.inputs() - 1, 0)))
-            state.needs_recompute = true;
+        // Rule C: the plant is excited on input_j, the closed loop on ref_r.
+        // The channel selector lives in the model panel; a parallel
+        // time-domain index pair was never deliberate (issue #9).
+        ImGui::TextDisabled("plant u%d  /  closed-loop r%d",
+                            state.input_j, state.ref_r);
         ImGui::EndTable();
     }
 

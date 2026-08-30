@@ -2,6 +2,7 @@
 #pragma once
 
 #include "linear_system.h"
+#include "analysis/controller_builders.h"
 #include "analysis/frequency_response.h"
 #include "analysis/model_library.h"
 #include "analysis/pole_zero.h"
@@ -10,7 +11,9 @@
 #include "analysis/time_response.h"
 #include "imgui.h"
 
+#include <algorithm>
 #include <cstring>
+#include <string>
 
 namespace caliburn {
 
@@ -33,9 +36,14 @@ inline ImU32 system_colors_u32[NUM_SYSTEMS] = {
     IM_COL32(249, 115, 22, 255),
 };
 
-enum class ControllerType { None, StateSpace, GainMatrix };
+enum class ControllerType { None, PID, LeadLag, StateSpace, GainMatrix };
 enum class InputType { Step, Impulse, Ramp };
-enum class PZMode { PoleZero, UnityFB, StateFB };
+
+// Flat 4-way; two entries are conditionally valid.  PlantLocus is the old
+// UnityFB, unchanged and honestly relabelled — it sweeps a proportional gain on
+// the bare plant channel and does not put the controller in the path.
+// LoopLocus sweeps kappa on the whole compensator.  See issue #10.
+enum class PZMode { PoleZero, PlantLocus, LoopLocus, StateFB };
 
 struct AppState {
     // --- Model ---
@@ -49,10 +57,32 @@ struct AppState {
     LinearSystem systems[NUM_SYSTEMS];
     bool system_valid[NUM_SYSTEMS] = {true, false, false, false};
 
-    // --- Channel selection ---
-    int output_i = 0;
-    int input_j = 0;
+    // --- Controller: loop list ---
+    // Maintained for the current plant regardless of ctrl_type, so
+    // None -> PID -> None -> PID round-trips without losing tuning and picking
+    // PID needs no seeding path of its own.  See issue #2.
+    std::vector<Loop> loops;
+    int cached_p = -1;  // plant dimensions the loop list was seeded for
+    int cached_m = -1;
+    int selected_loop = -1;  // last cell clicked in the pairing grid; -1 = none
+
+    // Per-output scale: the maximum allowed deviation for that output.  Channel
+    // Share is not scale-invariant and S&P's scaling is engineering intent, not
+    // a model property, so it comes from the user.  Reseeded to 1.0 by the same
+    // (p, m) guard as `loops`.  See issue #8.
+    std::vector<float> output_scales;
+
+    // --- Channel selection (rule C, issue #9) ---
+    int output_i = 0;  // [0, p) — plant output, controller input, loop output
+    int input_j = 0;   // [0, m) — plant input, controller output
+    int ref_r = 0;     // [0, p) — reference channel of the open/closed loop
     bool show_all_channels = false;
+
+    // Set by the recompute path: false when the selected channel has no loop on
+    // it.  Dead channels are suppressed with a stated reason rather than drawn
+    // with a fabricated flat 0 phase.
+    bool channel_live[NUM_SYSTEMS] = {true, true, true, true};
+    std::string channel_reason[NUM_SYSTEMS];
 
     // --- Analysis results ---
     FrequencyResponse bode[NUM_SYSTEMS];
@@ -87,13 +117,20 @@ struct AppState {
     float freq_max_hz = 100.0f;
     int num_freq_points = 500;
 
+    // --- Pairing diagnostic (RGA / Channel Share) ---
+    // One omega, plus a collapsed RGA-number-vs-omega sweep across the existing
+    // Bode grid.  S&P rule 2 gets no separate steady-state frequency: it is a
+    // DIC theorem requiring a stable plant, and neither Ball-Balancer (poles at
+    // the origin) nor Inverted Pendulum qualifies.  See issues #4, #6.
+    float diag_omega_hz = 1.0f;
+    bool diag_sweep = false;
+
     // --- Time response settings ---
     InputType input_type = InputType::Step;
     float amplitude = 1.0f;
     float slope = 1.0f;
     float duration = 10.0f;
     float dt_sim = 0.01f;
-    int time_input_j = 0;
 
     // --- Pole-zero / root locus settings ---
     PZMode pz_mode = PZMode::PoleZero;
@@ -104,6 +141,17 @@ struct AppState {
     float rl_alpha_min = 0.0f;
     float rl_alpha_max = 2.0f;
     float rl_current_alpha = 1.0f;
+
+    // Loop Locus.  A third explicit triple beside rl_k_* and rl_alpha_*: the
+    // three scales are genuinely different (kappa 0.01-100 log, K 0-100 linear,
+    // alpha 0-2 linear), so a shared triple would re-default on nearly every
+    // mode switch.  kappa_min > 0 is a correctness constraint: kappa = 0 would
+    // collapse a loop's states and make the closed-loop dimension ragged
+    // mid-sweep, which matchPoles reads out of bounds.
+    float rl_kappa_min = 0.01f;
+    float rl_kappa_max = 100.0f;
+    float rl_kappa_current = 1.0f;
+    double rl_loop_gain_margin = -1.0;  // kappa*, or < 0 for no crossing
 
     // --- Transfer function parameterization (1st/2nd order SISO) ---
     bool plant_is_1st_order = false;
@@ -130,6 +178,26 @@ struct AppState {
     double time_x_min = 0.0;
     double time_x_max = 10.0;
 };
+
+// Seed the identity pairing y[k] -> u[k] for k < min(p, m), and reset the
+// per-output scales.  Applied unconditionally on a dimension change.
+//
+// On Ball-Balancer this seeds a structurally DEAD pairing, deliberately: B(2,1)
+// and B(3,0) mean input 0 drives output 1's chain, so G is exactly
+// anti-diagonal and identity pairing leaves both loops open at every frequency.
+// That is the pairing diagnostic's demonstration case — RGA of an anti-diagonal
+// G is [[0,1],[1,0]], the loudest possible signal — and smart seeding would
+// delete the lesson.  See issue #2.
+inline void seedIdentityLoops(AppState& state) {
+    state.loops.clear();
+    const int p = state.plant.outputs();
+    const int m = state.plant.inputs();
+    for (int k = 0; k < std::min(p, m); ++k) {
+        state.loops.push_back(Loop{k, k, {}, {}});
+    }
+    state.output_scales.assign(static_cast<std::size_t>(p), 1.0f);
+    state.selected_loop = state.loops.empty() ? -1 : 0;
+}
 
 // Helper: write matrix to text buffer for ImGui display
 inline void matrixToTextBuf(const Eigen::MatrixXd& mat, char* buf,

@@ -36,7 +36,7 @@ void drawPoleZeroPanel(AppState& state) {
     }
 
     // Root locus controls
-    if (state.pz_mode == PZMode::UnityFB) {
+    if (state.pz_mode == PZMode::PlantLocus) {
         if (ImGui::BeginTable("##rl_ctrls", 3)) {
             ImGui::TableNextColumn();
             ImGui::TextUnformatted("K"); ImGui::SameLine();
@@ -192,7 +192,7 @@ void drawPoleZeroPanel(AppState& state) {
                                                 ImPlotProp_LineWeight, 1.5f));
                 }
 
-                double current_gain = (state.pz_mode == PZMode::UnityFB)
+                double current_gain = (state.pz_mode == PZMode::PlantLocus)
                                           ? state.rl_current_k
                                           : state.rl_current_alpha;
                 int best = 0;
@@ -229,6 +229,13 @@ void drawPoleZeroPanel(AppState& state) {
         }
 
         ImPlot::EndPlot();
+    }
+
+    // A suppressed trace must be distinguishable from breakage.
+    for (int s = 0; s < NUM_SYSTEMS; ++s) {
+        if (s == 2 || state.channel_reason[s].empty()) continue;
+        ImGui::TextDisabled("%s: %s", system_names[s],
+                            state.channel_reason[s].c_str());
     }
 
     ImGui::End();

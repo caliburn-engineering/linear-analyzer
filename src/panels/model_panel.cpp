@@ -367,6 +367,9 @@ void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
     if (ImGui::SliderInt("Input j", &state.input_j, 0, std::max(m - 1, 0))) {
         state.needs_recompute = true;
     }
+    if (ImGui::SliderInt("Reference r", &state.ref_r, 0, std::max(p - 1, 0))) {
+        state.needs_recompute = true;
+    }
     if (p <= 3 && m <= 3) {
         if (ImGui::Checkbox("Show All Channels", &state.show_all_channels)) {
             state.needs_recompute = true;

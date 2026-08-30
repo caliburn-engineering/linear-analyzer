@@ -279,41 +279,71 @@ void drawBodePanel(AppState& state) {
     if (freq_changed) state.needs_recompute = true;
 
     if (state.show_all_channels) {
-        int p = state.plant.outputs();
-        int m = state.plant.inputs();
-        if (ImGui::BeginTable("##bode_grid", m, ImGuiTableFlags_Borders)) {
-            for (int i = 0; i < p; ++i) {
+        const int p = state.plant.outputs();
+        const int m = state.plant.inputs();
+
+        // Two grids, by role.  The old single grid sized its table from the
+        // PLANT's (p, m) and indexed idx = i*m + j with the plant's m, while
+        // the writer filled each bode_grid[s] from that system's own shape —
+        // so for any non-square plant the panel read cells belonging to other
+        // channels, silently, behind an idx < size() guard.  Each table is now
+        // sized by the shape it actually holds.  See issue #9.
+        auto drawGrid = [&](const char* id, const char* title, int rows,
+                            int cols, const int* systems, int n_systems) {
+            bool any = false;
+            for (int k = 0; k < n_systems; ++k) {
+                const int s = systems[k];
+                if (state.trace_visible[s] && state.system_valid[s] &&
+                    !state.bode_grid[s].empty()) { any = true; break; }
+            }
+            if (!any) return;
+            ImGui::SeparatorText(title);
+            if (!ImGui::BeginTable(id, cols, ImGuiTableFlags_Borders)) return;
+            for (int i = 0; i < rows; ++i) {
                 ImGui::TableNextRow();
-                for (int j = 0; j < m; ++j) {
+                for (int j = 0; j < cols; ++j) {
                     ImGui::TableNextColumn();
                     ImGui::Text("(%d,%d)", i, j);
-                    for (int s = 0; s < NUM_SYSTEMS; ++s) {
-                        if (!state.trace_visible[s] || !state.system_valid[s]) continue;
-                        int idx = i * m + j;
-                        if (idx < (int)state.bode_grid[s].size()) {
-                            const auto& bode = state.bode_grid[s][idx];
-                            if (bode.points.empty()) continue;
-                            int nn = static_cast<int>(bode.points.size());
-                            std::vector<double> ff(nn), mm(nn);
-                            for (int k = 0; k < nn; ++k) {
-                                ff[k] = bode.points[k].freq_hz;
-                                mm[k] = bode.points[k].magnitude_db;
-                            }
-                            char pid[64];
-                            std::snprintf(pid, sizeof(pid), "##bode_%d_%d_%d", i, j, s);
-                            if (ImPlot::BeginPlot(pid, ImVec2(-1, 120))) {
-                                ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
-                                ImPlot::PlotLine(system_names[s], ff.data(), mm.data(), nn,
-                                                 ImPlotSpec(ImPlotProp_LineColor,
-                                                            system_colors[s]));
-                                ImPlot::EndPlot();
-                            }
+                    for (int k = 0; k < n_systems; ++k) {
+                        const int s = systems[k];
+                        if (!state.trace_visible[s] || !state.system_valid[s])
+                            continue;
+                        const int idx = i * cols + j;
+                        if (idx >= (int)state.bode_grid[s].size()) continue;
+                        const auto& bode = state.bode_grid[s][idx];
+                        if (bode.points.empty()) continue;
+                        const int nn = static_cast<int>(bode.points.size());
+                        std::vector<double> ff(nn), mm(nn);
+                        for (int q = 0; q < nn; ++q) {
+                            ff[q] = bode.points[q].freq_hz;
+                            mm[q] = bode.points[q].magnitude_db;
+                        }
+                        char pid[64];
+                        std::snprintf(pid, sizeof(pid), "##bode_%s_%d_%d_%d",
+                                      id, i, j, s);
+                        if (ImPlot::BeginPlot(pid, ImVec2(-1, 120))) {
+                            ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
+                            ImPlot::PlotLine(system_names[s], ff.data(),
+                                             mm.data(), nn,
+                                             ImPlotSpec(ImPlotProp_LineColor,
+                                                        system_colors[s]));
+                            ImPlot::EndPlot();
                         }
                     }
                 }
             }
             ImGui::EndTable();
-        }
+        };
+
+        // The controller's cells are mostly blank by construction — one nonzero
+        // per loop — so the open grid becomes a picture of which channels are
+        // actually closed.  systems[2] stays excluded from Bode, as today.
+        const int open_systems[2] = {0, 1};
+        const int loop_systems[1] = {3};
+        drawGrid("open", "Open channels  (y_i \xe2\x86\x90 u_j)", p, m,
+                 open_systems, 2);
+        drawGrid("loop", "Loop channels  (y_i \xe2\x86\x90 r_j)", p, p,
+                 loop_systems, 1);
     } else {
         // Determine which system to show margins for
         int margin_sys = -1;
@@ -326,6 +356,13 @@ void drawBodePanel(AppState& state) {
         float avail_h = ImGui::GetContentRegionAvail().y;
         float plot_h = avail_h / 2.0f;
         plotBodeSingle("##single", state, plot_h, margin_sys);
+    }
+
+    // A suppressed trace must be distinguishable from breakage.
+    for (int s = 0; s < NUM_SYSTEMS; ++s) {
+        if (s == 2 || state.channel_reason[s].empty()) continue;
+        ImGui::TextDisabled("%s: %s", system_names[s],
+                            state.channel_reason[s].c_str());
     }
 
     ImGui::End();

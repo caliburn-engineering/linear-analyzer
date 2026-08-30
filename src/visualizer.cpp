@@ -61,11 +61,61 @@ static void render_frame(void* arg) {
     if (state.needs_recompute) {
         state.needs_recompute = false;
 
+        // Plant dimensions changed: reseed the loop list wholesale.
+        //
+        // Reseed, not clamp and not partial-drop.  Clamping is the dangerous
+        // option — a loop clamped from y1 to y0 controls a different physical
+        // quantity while still carrying gains tuned for the old one, with
+        // nothing on screen saying so.  Gains are lost, but a Kp tuned for a
+        // quarter-car is meaningless on a pendulum.
+        //
+        // Keyed on dimensions, not plant equality, so the physical-parameter
+        // sliders never disturb tuning mid-sweep.  Located here rather than in
+        // the preset handler because FOUR sites mutate state.plant — the preset
+        // combo, Apply Plant, the physical-param sliders and applyTFToSS — and
+        // only a central guard covers all of them.  See issue #2.
+        if (state.plant.outputs() != state.cached_p ||
+            state.plant.inputs() != state.cached_m) {
+            state.cached_p = state.plant.outputs();
+            state.cached_m = state.plant.inputs();
+            caliburn::seedIdentityLoops(state);
+            state.output_i = 0;
+            state.input_j = 0;
+            state.ref_r = 0;
+        }
+
         state.systems[0] = state.plant;
         state.system_valid[0] = true;
 
-        if (state.ctrl_type == caliburn::ControllerType::StateSpace &&
-            state.ctrl_ss.A.size() > 0) {
+        const bool loop_backed =
+            state.ctrl_type == caliburn::ControllerType::PID ||
+            state.ctrl_type == caliburn::ControllerType::LeadLag;
+        const caliburn::LoopKind loop_kind =
+            (state.ctrl_type == caliburn::ControllerType::LeadLag)
+                ? caliburn::LoopKind::LeadLag
+                : caliburn::LoopKind::PID;
+
+        if (loop_backed && !state.loops.empty()) {
+            // The controller is m-out/p-in by construction, so seriesConnect's
+            // precondition holds and the open loop is p x p — feedbackConnect
+            // needs no shape test.  systems[1] is written directly rather than
+            // through state.ctrl_ss, so switching to PID does not clobber a
+            // hand-entered State-Space controller.
+            state.systems[1] = caliburn::buildLoopController(
+                state.loops, loop_kind, state.plant);
+            state.system_valid[1] = true;
+            state.systems[2] =
+                caliburn::seriesConnect(state.systems[1], state.plant);
+            state.system_valid[2] = true;
+            state.systems[3] = caliburn::feedbackConnect(state.systems[2]);
+            state.system_valid[3] = true;
+        } else if (state.ctrl_type == caliburn::ControllerType::StateSpace &&
+                   state.ctrl_ss.D.size() > 0) {
+            // Was `ctrl_ss.A.size() > 0`, which conflated "is a controller
+            // configured" with "is it safe to analyze".  The n == 0 guards make
+            // the second question moot, and a 0-state controller is a
+            // legitimate controller — D is the matrix that is always present
+            // once Apply Controller has run.  See issue #5.
             state.systems[1] = state.ctrl_ss;
             state.system_valid[1] = true;
             if (state.ctrl_ss.outputs() == state.plant.inputs()) {
@@ -88,32 +138,114 @@ static void render_frame(void* arg) {
             state.systems[3] = caliburn::stateFeedbackClose(state.plant, state.ctrl_K);
             state.system_valid[3] = true;
         } else {
+            // Includes a loop-backed type with an empty loop list, which is
+            // equivalent to ControllerType::None (issue #2).  An all-zero m x p
+            // controller connects cleanly but gives an open loop of -inf dB at
+            // every frequency, which is not worth handing to Bode and Nyquist.
             state.system_valid[1] = false;
             state.system_valid[2] = false;
             state.system_valid[3] = false;
         }
 
+        // Rule C.  output_i in [0,p), input_j in [0,m), ref_r in [0,p).
+        //   plant           p x m -> (i, j)
+        //   controller      m x p -> (j, i)   transposed
+        //   open/closed     p x p -> (i, r)
+        // The output index is genuinely shared: plant output i, controller
+        // input i and loop-system output i are the same physical signal — so
+        // this is three indices, not six, and every system is in range by
+        // construction.  See issue #9.
+        auto channelFor = [&](int s, int& out, int& in) {
+            switch (s) {
+                case 1:  out = state.input_j;  in = state.output_i; break;
+                case 2:
+                case 3:  out = state.output_i; in = state.ref_r;    break;
+                default: out = state.output_i; in = state.input_j;  break;
+            }
+        };
+
+        // Liveness is read off the loop list, never by inspecting matrices.
+        auto loopOn = [&](int out, int in) {
+            for (const auto& l : state.loops)
+                if (l.out == out && l.in == in) return true;
+            return false;
+        };
+        auto refLive = [&](int r) {
+            for (const auto& l : state.loops)
+                if (l.out == r) return true;
+            return false;
+        };
+
         for (int s = 0; s < caliburn::NUM_SYSTEMS; ++s) {
-            if (!state.system_valid[s]) continue;
-            if (s == 2) continue;  // open-loop combined: computed for feedbackConnect only
+            state.channel_live[s] = true;
+            state.channel_reason[s].clear();
+        }
+        if (loop_backed && !state.loops.empty()) {
+            char reason[96];
+            if (!loopOn(state.output_i, state.input_j)) {
+                state.channel_live[1] = false;
+                std::snprintf(reason, sizeof(reason),
+                              "no loop pairs y%d \xe2\x86\x92 u%d",
+                              state.output_i, state.input_j);
+                state.channel_reason[1] = reason;
+            }
+            if (!refLive(state.ref_r)) {
+                state.channel_live[2] = false;
+                state.channel_live[3] = false;
+                std::snprintf(reason, sizeof(reason),
+                              "reference r%d drives no loop", state.ref_r);
+                state.channel_reason[2] = reason;
+                state.channel_reason[3] = reason;
+            }
+        }
+
+        for (int s = 0; s < caliburn::NUM_SYSTEMS; ++s) {
+            // s == 2 (open-loop combined) is computed for feedbackConnect only.
+            if (!state.system_valid[s] || s == 2 || !state.channel_live[s]) {
+                state.bode[s] = {};
+                state.pole_zero[s] = {};
+                continue;
+            }
+            int out = 0, in = 0;
+            channelFor(s, out, in);
             state.bode[s] = caliburn::computeBode(
-                state.systems[s], state.output_i, state.input_j,
+                state.systems[s], out, in,
                 state.freq_min_hz, state.freq_max_hz, state.num_freq_points);
+            // The controller's pole plot stays unfiltered: poles are eig(A) for
+            // the whole system regardless of channel, only zeros are
+            // channel-specific.  That is the correct convention and what the
+            // plant already does.
             state.pole_zero[s] = caliburn::computePoleZero(
-                state.systems[s], state.output_i, state.input_j);
+                state.systems[s], out, in);
         }
 
         if (state.show_all_channels) {
+            const int p = state.plant.outputs();
+            const int m = state.plant.inputs();
+            // Two grids, by role.  Rule C applied to the grid, so the grid
+            // needs no rule of its own and each table is indexed by the shape
+            // it actually holds — the plant-dimensioned read in the panel
+            // cannot recur.
+            //   open grid  p x m : plant at (i,j), controller at (j,i)
+            //   loop grid  p x p : closed loop at (i,r)
             for (int s = 0; s < caliburn::NUM_SYSTEMS; ++s) {
-                if (!state.system_valid[s]) continue;
-                if (s == 2) continue;
-                int p = state.systems[s].outputs();
-                int m = state.systems[s].inputs();
-                state.bode_grid[s].resize(p * m);
-                for (int i = 0; i < p; ++i) {
-                    for (int j = 0; j < m; ++j) {
-                        state.bode_grid[s][i * m + j] = caliburn::computeBode(
-                            state.systems[s], i, j,
+                if (!state.system_valid[s] || s == 2) {
+                    state.bode_grid[s].clear();
+                    continue;
+                }
+                const int rows = p;
+                const int cols = (s == 3) ? p : m;
+                state.bode_grid[s].assign(
+                    static_cast<std::size_t>(rows * cols), {});
+                for (int i = 0; i < rows; ++i) {
+                    for (int j = 0; j < cols; ++j) {
+                        // Cell (i,j) of the open grid means plant channel (i,j)
+                        // and controller channel (j,i) — the same physical
+                        // path, read from each end.
+                        int out = i, in = j;
+                        if (s == 1) { out = j; in = i; }
+                        state.bode_grid[s][i * cols + j] = caliburn::computeBode(
+                            state.systems[s], out, in,
                             state.freq_min_hz, state.freq_max_hz,
                             state.num_freq_points);
                     }
@@ -123,20 +255,23 @@ static void render_frame(void* arg) {
 
         for (int s : {0, 3}) {
             if (!state.system_valid[s]) continue;
+            // Plant is p x m, closed loop is p x p — the same shape mismatch,
+            // in the time domain.  No parallel time-domain index pair.
+            const int u_idx = (s == 0) ? state.input_j : state.ref_r;
             switch (state.input_type) {
                 case caliburn::InputType::Step:
                     state.time_resp[s] = caliburn::computeStepResponse(
-                        state.systems[s], state.time_input_j,
+                        state.systems[s], u_idx,
                         state.amplitude, state.duration, state.dt_sim);
                     break;
                 case caliburn::InputType::Impulse:
                     state.time_resp[s] = caliburn::computeImpulseResponse(
-                        state.systems[s], state.time_input_j,
+                        state.systems[s], u_idx,
                         state.amplitude, state.duration, state.dt_sim);
                     break;
                 case caliburn::InputType::Ramp:
                     state.time_resp[s] = caliburn::computeRampResponse(
-                        state.systems[s], state.time_input_j,
+                        state.systems[s], u_idx,
                         state.slope, state.duration, state.dt_sim);
                     break;
             }
@@ -151,7 +286,7 @@ static void render_frame(void* arg) {
                 caliburn::checkObservability(state.systems[3]);
         }
 
-        if (state.pz_mode == caliburn::PZMode::UnityFB) {
+        if (state.pz_mode == caliburn::PZMode::PlantLocus) {
             state.root_locus = caliburn::computeRootLocus(
                 state.plant, state.output_i, state.input_j,
                 state.rl_k_min, state.rl_k_max, state.rl_num_points);
