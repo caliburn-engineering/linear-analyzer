@@ -122,10 +122,25 @@ mostly plots you are not checking. Then read the PNG.
 - **A blank or unchanged screenshot after a click usually means focus, not a
   code bug.** Re-check `hyprctl activewindow -j` before concluding anything.
 - The window may be tiled small. It resizes when it is the only tiled client.
-- The bundled `NotoSans-Regular.ttf` has **no arrow or math-operator glyphs** —
-  U+2190 (left arrow), U+2220, U+221E all render as a hollow box, even though
-  `visualizer.cpp` lists those ranges in `glyph_ranges`. Greek renders fine.
-  Use ASCII (`<-`, `->`) in UI strings; do not add arrows expecting them to draw.
+- **A hollow box has two different causes, and they need different fixes.**
+  Measured against the bundled `NotoSans-Regular.ttf` (issue #15):
+
+  | Block | In the font | Verdict |
+  |---|---|---|
+  | Arrows U+2190-21FF | 0 / 112 | Write ASCII: `<-`, `->` |
+  | Mathematical Operators U+2200-22FF | 1 / 256 (only U+2212 MINUS) | Write ASCII: `inf`, `arg`, `~=` |
+  | General Punctuation U+2000-206F | 111 / 112 | Fine — the range is requested |
+  | Phonetic Extensions U+1D00-1D7F | 128 / 128 | Fine — the range is requested |
+  | Greek, super/subscripts, Latin-1 | covered | Fine |
+
+  So: a glyph the **font** lacks can never be made to draw, and must be
+  rewritten in ASCII. A glyph the font has but `glyph_ranges` in
+  `visualizer.cpp` does not **request** boxes just as convincingly, and is
+  fixed by adding the range. Em dash and bullet were the second kind and drew
+  as boxes in 15 UI strings until #15.
+
+  To check a candidate character before using it, read the TTF's `cmap`
+  rather than guessing.
 - Watch for **C++ hex-escape greediness** in UI strings: `"\xcf\x84f"` is parsed
   as `\xcf` then `\x84f` (out of range), not `tau` + `f`. Split the literal:
   `"\xcf\x84" "f"`.

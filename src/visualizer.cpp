@@ -549,12 +549,25 @@ int main() {
     font_cfg.OversampleH = 2;
     font_cfg.OversampleV = 2;
 
+    // Only ranges the bundled NotoSans subset actually covers.  A range the
+    // font lacks costs nothing but buys nothing either: the glyph still draws
+    // as a hollow substitution box.  Measured against this exact TTF:
+    //
+    //   General Punctuation  111/112   em dash, bullet          <- was missing
+    //   Phonetic Extensions  128/128   the subscript letters    <- was missing
+    //   Arrows                 0/112   nothing at all           <- was listed
+    //   Mathematical Ops       1/256   U+2212 MINUS, and no more
+    //
+    // So the arrow range is dropped, and anything from Mathematical Operators
+    // — infinity, angle, approximately-equal — has to be written in ASCII no
+    // matter what this list says.
     static const ImWchar glyph_ranges[] = {
         0x0020, 0x00FF,  // Basic Latin + Latin Supplement
         0x0370, 0x03FF,  // Greek and Coptic
+        0x1D00, 0x1D7F,  // Phonetic Extensions — subscript letters
+        0x2000, 0x206F,  // General Punctuation — em dash, bullet
         0x2070, 0x209F,  // Superscripts and Subscripts
-        0x2200, 0x22FF,  // Mathematical Operators
-        0x2190, 0x21FF,  // Arrows
+        0x2212, 0x2212,  // MINUS SIGN, the one Mathematical Operator present
         0,
     };
 

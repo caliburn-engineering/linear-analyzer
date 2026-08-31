@@ -265,7 +265,7 @@ std::vector<ModelEntry> getBuiltinModels() {
              "For a solid sphere, I = (2/5)\xc2\xb7m\xc2\xb7r\xc2\xb2:\n"
              "  (m + 2m/5)\xc2\xb7" "a = m\xc2\xb7g\xc2\xb7sin(\xce\xb8)\n"
              "  (7/5)\xc2\xb7" "a = g\xc2\xb7sin(\xce\xb8)\n\n"
-             "Linearize for small angles (sin\xce\xb8 \xe2\x89\x88 \xce\xb8):\n"
+             "Linearize for small angles (sin\xce\xb8 ~= \xce\xb8):\n"
              "  x'' = (5g/7)\xc2\xb7\xce\xb8y     (tilt about y moves ball in x)\n"
              "  y'' = (5g/7)\xc2\xb7\xce\xb8x     (tilt about x moves ball in y)"},
 
@@ -488,7 +488,7 @@ std::vector<ModelEntry> getBuiltinModels() {
              "  (M+m)\xc2\xb7x'' + m\xc2\xb7l\xc2\xb7\xce\xb8''\xc2\xb7" "cos\xce\xb8 - m\xc2\xb7l\xc2\xb7\xce\xb8'\xc2\xb2\xc2\xb7sin\xce\xb8 = F\n"
              "  m\xc2\xb7l\xc2\xb7x''\xc2\xb7" "cos\xce\xb8 + m\xc2\xb7l\xc2\xb2\xc2\xb7\xce\xb8'' - m\xc2\xb7g\xc2\xb7l\xc2\xb7sin\xce\xb8 = 0\n\n"
              "Linearize about \xce\xb8=0 (upright):\n"
-             "  cos\xce\xb8 \xe2\x89\x88 1, sin\xce\xb8 \xe2\x89\x88 \xce\xb8, \xce\xb8'\xc2\xb2 \xe2\x89\x88 0\n\n"
+             "  cos\xce\xb8 ~= 1, sin\xce\xb8 ~= \xce\xb8, \xce\xb8'\xc2\xb2 ~= 0\n\n"
              "  (M+m)\xc2\xb7x'' + m\xc2\xb7l\xc2\xb7\xce\xb8'' = F\n"
              "  x'' + l\xc2\xb7\xce\xb8'' = g\xc2\xb7\xce\xb8\n\n"
              "Solve for accelerations:\n"
