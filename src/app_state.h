@@ -2,6 +2,7 @@
 #pragma once
 
 #include "linear_system.h"
+#include "auto_balance.h"
 #include "analysis/controller_builders.h"
 #include "analysis/frequency_response.h"
 #include "analysis/loop_diagnostics.h"

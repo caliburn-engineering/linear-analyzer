@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <string>
 
 #include "panels/model_panel.h"
 #include "panels/properties_panel.h"
@@ -25,6 +26,63 @@
 #include "panels/time_response_panel.h"
 
 #include "plate_view.h"
+
+// The design surface's current answer, in the form the plate needs it.
+//
+// Assembled here rather than inside PlateView because only this side knows
+// which preset is loaded, which controller type is selected and whether the
+// Riccati solve landed.  The plate adds the two checks it alone can make — the
+// gain's shape and whether the mechanism is the one it simulates.
+//
+// The servo lag and the home leg angle are handed over whether or not a gain
+// is on offer: they are properties of the plate, and the model panel's sliders
+// are the one place they live.
+static void handDesignToPlate(caliburn::AppState& state,
+                              const std::vector<caliburn::ModelEntry>& presets,
+                              caliburn::PlateView& plate) {
+    constexpr double kDeg = 3.14159265358979323846 / 180.0;
+
+    const bool is_cascade =
+        state.preset_index >= 0 &&
+        state.preset_index < static_cast<int>(presets.size()) &&
+        presets[state.preset_index].name.rfind("Ball-Balancer Cascade", 0) == 0;
+
+    auto param = [&state](const char* symbol, double fallback) -> double {
+        for (const auto& p : state.current_params)
+            if (p.symbol == symbol) return static_cast<double>(p.value);
+        return fallback;
+    };
+
+    caliburn::AutoBalanceDesign d;
+    if (is_cascade) {
+        d.home_leg_rad = param("a0", 45.0) * kDeg;
+        // Same floor as the model builder applies, so the simulated servo and
+        // the modelled one cannot differ at the slider's bottom end.
+        d.servo_tau = std::max(1e-3, param("\xcf\x84", 0.05));
+        d.mechanism.R_ground  = param("Rg", 0.300);
+        d.mechanism.R_table   = param("Rt", 0.300);
+        d.mechanism.L1        = param("L1", 0.150);
+        d.mechanism.L2        = param("L2", 0.150);
+        d.mechanism.alpha_min = 10.0 * kDeg;
+        d.mechanism.alpha_max = 80.0 * kDeg;
+        d.alpha_min_rad = d.mechanism.alpha_min;
+        d.alpha_max_rad = d.mechanism.alpha_max;
+    }
+
+    std::string reason;
+    bool offered = false;
+    if (!is_cascade) {
+        reason = "plant is not the Ball-Balancer Cascade";
+    } else if (state.ctrl_type != caliburn::ControllerType::LQR) {
+        reason = "select LQR as the controller type";
+    } else if (!state.lqr_result.success) {
+        reason = "the LQR solve failed";
+    } else {
+        d.K = state.lqr_result.K;
+        offered = true;
+    }
+    plate.setDesign(d, offered, reason);
+}
 
 struct FrameContext {
     GLFWwindow* window;
@@ -85,6 +143,12 @@ static void render_frame(void* arg) {
     // Fixed step, as the plate view has always used: vsync on the desktop and
     // requestAnimationFrame on the web both hold the frame rate at 60 Hz, and a
     // fixed step keeps the ball's trajectory reproducible.
+    //
+    // The design is handed over before the step, so the plate drives on the
+    // gain the previous frame's recompute produced.  One frame of staleness at
+    // 60 Hz against a servo lag of 0.05 s; the alternative is reordering the
+    // whole frame around a dependency the loop does not have.
+    handDesignToPlate(state, presets, *ctx->plate);
     ctx->plate->step(window, 1.0f / 60.0f);
 
     // --- Full-viewport dockspace ---
@@ -154,9 +218,9 @@ static void render_frame(void* arg) {
         // LQR weights follow the STATE count, which the (p, m) guard above
         // does not track — a plant can keep its shape and change order.
         if (state.lqr_q.size() != state.plant.states())
-            state.lqr_q = Eigen::VectorXd::Ones(state.plant.states());
+            state.lqr_q = caliburn::defaultLqrStateWeights(state.plant.states());
         if (state.lqr_r.size() != state.plant.inputs())
-            state.lqr_r = Eigen::VectorXd::Ones(state.plant.inputs());
+            state.lqr_r = caliburn::defaultLqrInputWeights(state.plant.inputs());
 
         state.systems[0] = state.plant;
         state.system_valid[0] = true;

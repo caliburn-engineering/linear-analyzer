@@ -460,8 +460,11 @@ static void drawLqrDesigner(AppState& state) {
 
     ImGui::Spacing();
     if (ImGui::Button("Reset weights")) {
-        state.lqr_q = Eigen::VectorXd::Ones(n);
-        state.lqr_r = Eigen::VectorXd::Ones(m);
+        // Back to the tuning the application opens on, not to unit weights: on
+        // this plant those park the ball in the rolling-friction dead band,
+        // 37 mm off centre.  See defaultLqrStateWeights.
+        state.lqr_q = defaultLqrStateWeights(n);
+        state.lqr_r = defaultLqrInputWeights(m);
         state.needs_recompute = true;
     }
 

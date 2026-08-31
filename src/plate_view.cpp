@@ -125,7 +125,33 @@ void PlateView::shutdownGL() {
 }
 
 void PlateView::setAllServos(float degrees) {
-    alpha_deg_[0] = alpha_deg_[1] = alpha_deg_[2] = degrees;
+    for (int i = 0; i < 3; ++i) alpha_cmd_deg_[i] = alpha_deg_[i] = degrees;
+}
+
+bool PlateView::designUsable() const {
+    return design_offered_ && gainFitsCascade(design_) &&
+           sameMechanism(design_.mechanism, tk_.params());
+}
+
+void PlateView::setDesign(const AutoBalanceDesign& d, bool offered,
+                          const std::string& reason) {
+    design_ = d;
+    design_offered_ = offered;
+    design_reason_ = reason;
+
+    if (offered && !gainFitsCascade(d)) {
+        design_reason_ = "the gain is not 3 x 7 - this is not the cascade plant";
+    } else if (offered && !sameMechanism(d.mechanism, tk_.params())) {
+        // The geometry sliders move the plant the gain is designed against;
+        // the simulated plate keeps the geometry it was built with.  Refusing
+        // is the honest answer — engaging would drive the wrong mechanism with
+        // a gain that has no idea, and nothing on screen would say so.
+        design_reason_ = "plant geometry differs from the simulated plate";
+    }
+
+    // Losing the design mid-run drops the loop rather than freezing the last
+    // command: a stale gain is not a controller.
+    if (auto_engaged_ && !designUsable()) auto_engaged_ = false;
 }
 
 void PlateView::resetBall() {
@@ -136,6 +162,10 @@ void PlateView::resetBall() {
 void PlateView::resetAll() {
     setAllServos(45.0f);
     animate_ = false;
+    auto_engaged_ = false;
+    auto_saturated_ = false;
+    sp_x_mm_ = 0.0f;
+    sp_y_mm_ = 0.0f;
     anim_time_ = 0.0f;
     home_ = tk_.home_pose();
     camera_ = defaultCamera();
@@ -172,32 +202,58 @@ void PlateView::step(GLFWwindow* window, float dt) {
 
     if (plot_state_.paused) return;
 
-    // --- Animation ---
-    if (animate_) {
-        anim_time_ += dt * anim_speed_;
-        const float amp = anim_amplitude_;
-        const float w = 2.0f * static_cast<float>(M_PI) * 0.5f * anim_time_;
-        alpha_deg_[0] = 45.0f + amp * std::sin(w);
-        alpha_deg_[1] = 45.0f + amp * std::sin(w + 2.0f * static_cast<float>(M_PI) / 3.0f);
-        alpha_deg_[2] = 45.0f + amp * std::sin(w + 4.0f * static_cast<float>(M_PI) / 3.0f);
-    }
-    sim_time_ += dt;
-
-    // --- Kinematics ---
+    // --- Where the leg commands come from ---
+    //
+    // Three writers, one array, in strict precedence: the closed loop, then
+    // the animation, then whatever the sliders last left there.  The
+    // controller reads the legs where they ARE and the ball where it IS, and
+    // the servos move afterwards — the same causal order the closed-loop test
+    // runs, which is what makes that test evidence about this code.
     const std::array<double, 3> alpha_rad = {
         alpha_deg_[0] * kDeg, alpha_deg_[1] * kDeg, alpha_deg_[2] * kDeg};
 
-    fk_result_ = tk_.forward_kinematics(alpha_rad, home_);
+    if (auto_engaged_ && designUsable()) {
+        const LegCommand c = legCommand(design_, alpha_rad, ball_state_,
+                                        sp_x_mm_ * 1e-3, sp_y_mm_ * 1e-3);
+        auto_saturated_ = c.saturated;
+        for (int i = 0; i < 3; ++i)
+            alpha_cmd_deg_[i] = static_cast<float>(c.alpha_rad[i] / kDeg);
+    } else if (animate_) {
+        auto_saturated_ = false;
+        anim_time_ += dt * anim_speed_;
+        const float amp = anim_amplitude_;
+        const float w = 2.0f * static_cast<float>(M_PI) * 0.5f * anim_time_;
+        alpha_cmd_deg_[0] = 45.0f + amp * std::sin(w);
+        alpha_cmd_deg_[1] = 45.0f + amp * std::sin(w + 2.0f * static_cast<float>(M_PI) / 3.0f);
+        alpha_cmd_deg_[2] = 45.0f + amp * std::sin(w + 4.0f * static_cast<float>(M_PI) / 3.0f);
+    } else {
+        auto_saturated_ = false;
+    }
+    sim_time_ += dt;
+
+    // --- Servos ---
+    const std::array<double, 3> cmd_rad = {
+        alpha_cmd_deg_[0] * kDeg, alpha_cmd_deg_[1] * kDeg, alpha_cmd_deg_[2] * kDeg};
+    const std::array<double, 3> next =
+        stepServos(alpha_rad, cmd_rad, design_.servo_tau, dt);
+    for (int i = 0; i < 3; ++i)
+        alpha_deg_[i] = static_cast<float>(next[i] / kDeg);
+
+    // --- Kinematics ---
+    const std::array<double, 3> alpha_now = {
+        alpha_deg_[0] * kDeg, alpha_deg_[1] * kDeg, alpha_deg_[2] * kDeg};
+
+    fk_result_ = tk_.forward_kinematics(alpha_now, home_);
     if (!fk_result_.converged || fk_result_.residual_norm > 1e-6) {
         const TablePose analytic = tk_.home_pose(
-            (alpha_rad[0] + alpha_rad[1] + alpha_rad[2]) / 3.0);
-        const FKResult retry = tk_.forward_kinematics(alpha_rad, analytic);
+            (alpha_now[0] + alpha_now[1] + alpha_now[2]) / 3.0);
+        const FKResult retry = tk_.forward_kinematics(alpha_now, analytic);
         if (retry.converged && retry.residual_norm < fk_result_.residual_norm)
             fk_result_ = retry;
     }
     pose_ = fk_result_.pose;
-    condition_num_ = tk_.condition_number(alpha_rad, pose_);
-    manipulability_ = tk_.manipulability(alpha_rad, pose_);
+    condition_num_ = tk_.condition_number(alpha_now, pose_);
+    manipulability_ = tk_.manipulability(alpha_now, pose_);
     if (fk_result_.converged) home_ = pose_;
 
     // --- Ball ---
@@ -251,24 +307,43 @@ void PlateView::drawControls() {
     if (ImGui::Button("Nudge +x")) ball_state_(2) += ball_nudge_;
     ImGui::SameLine();
     if (ImGui::Button("Nudge +y")) ball_state_(3) += ball_nudge_;
+    ImGui::SameLine();
+    // The disturbance the loop is watched against: put the ball a fifth of the
+    // plate out and let go.  A nudge tests recovery from a kick; this tests
+    // recovery from a position, which is what the design surface is aimed at.
+    if (ImGui::Button("Displace")) {
+        ball_state_ << 0.06, -0.04, 0.0, 0.0;
+        ball_on_plate_ = true;
+    }
     ImGui::SliderFloat("Nudge [m/s]", &ball_nudge_, 0.02f, 0.5f, "%.2f");
+
+    drawBalanceControls();
 
     // --- Servo Angles ---
     ImGui::SeparatorText("Servo Angles");
+
+    const bool driven = auto_engaged_ && designUsable();
+    if (driven) {
+        // Not hidden — the sliders become the readout of what u = -Kx is
+        // asking for, which is the most direct view of the loop working.
+        ImGui::TextDisabled("commanded by the LQR gain");
+    }
+    ImGui::BeginDisabled(driven);
+
     ImGui::Checkbox("Link all servos", &link_servos_);
 
     const float a_min = static_cast<float>(tk_.params().alpha_min / kDeg);
     const float a_max = static_cast<float>(tk_.params().alpha_max / kDeg);
 
     if (link_servos_) {
-        if (ImGui::SliderFloat("All##servo", &alpha_deg_[0], a_min, a_max, "%.1f deg")) {
-            alpha_deg_[1] = alpha_deg_[0];
-            alpha_deg_[2] = alpha_deg_[0];
+        if (ImGui::SliderFloat("All##servo", &alpha_cmd_deg_[0], a_min, a_max, "%.1f deg")) {
+            alpha_cmd_deg_[1] = alpha_cmd_deg_[0];
+            alpha_cmd_deg_[2] = alpha_cmd_deg_[0];
         }
     } else {
-        ImGui::SliderFloat("\xce\xb1\xe2\x82\x80 [deg]", &alpha_deg_[0], a_min, a_max, "%.1f");
-        ImGui::SliderFloat("\xce\xb1\xe2\x82\x81 [deg]", &alpha_deg_[1], a_min, a_max, "%.1f");
-        ImGui::SliderFloat("\xce\xb1\xe2\x82\x82 [deg]", &alpha_deg_[2], a_min, a_max, "%.1f");
+        ImGui::SliderFloat("\xce\xb1\xe2\x82\x80 [deg]", &alpha_cmd_deg_[0], a_min, a_max, "%.1f");
+        ImGui::SliderFloat("\xce\xb1\xe2\x82\x81 [deg]", &alpha_cmd_deg_[1], a_min, a_max, "%.1f");
+        ImGui::SliderFloat("\xce\xb1\xe2\x82\x82 [deg]", &alpha_cmd_deg_[2], a_min, a_max, "%.1f");
     }
 
     if (ImGui::Button("Home (45)")) setAllServos(45.0f);
@@ -276,6 +351,12 @@ void PlateView::drawControls() {
     if (ImGui::Button("Low (20)")) setAllServos(20.0f);
     ImGui::SameLine();
     if (ImGui::Button("High (70)")) setAllServos(70.0f);
+    ImGui::EndDisabled();
+
+    // The sliders are the COMMAND; the legs lag behind it.  Without this line
+    // the two readouts disagree on screen with nothing saying why.
+    ImGui::Text("legs at %.1f, %.1f, %.1f deg (lag \xcf\x84 = %.3f s)",
+                alpha_deg_[0], alpha_deg_[1], alpha_deg_[2], design_.servo_tau);
 
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
@@ -284,11 +365,13 @@ void PlateView::drawControls() {
 
     // --- Animation ---
     ImGui::SeparatorText("Animation");
+    ImGui::BeginDisabled(driven);
     ImGui::Checkbox("Animate", &animate_);
     if (animate_) {
         ImGui::SliderFloat("Speed", &anim_speed_, 0.1f, 5.0f, "%.1f");
         ImGui::SliderFloat("Amplitude [deg]", &anim_amplitude_, 1.0f, 20.0f, "%.1f");
     }
+    ImGui::EndDisabled();
 
     // --- Pause ---
     ImGui::SeparatorText("Simulation");
@@ -356,6 +439,60 @@ void PlateView::drawControls() {
     }
 
     ImGui::End();
+}
+
+// The one control the whole ticket is about: hand the plate over to the gain
+// the model panel just designed.
+//
+// The three servo sliders and u = -Kx want to write the same array, so they
+// cannot both be live.  The loop wins while it is engaged and the sliders go
+// read-only rather than disappearing — a disabled slider that keeps moving is
+// the clearest possible statement of what the controller is doing, and there
+// is nothing left for a manual command to mean.  The setpoint takes over the
+// steering job, and it is a BALL position rather than a plate tilt, because
+// that is the quantity the design is regulating.
+void PlateView::drawBalanceControls() {
+    ImGui::SeparatorText("Balance Loop");
+
+    const bool usable = designUsable();
+    if (!usable) {
+        auto_engaged_ = false;
+        ImGui::BeginDisabled(true);
+        bool off = false;
+        ImGui::Checkbox("Auto (LQR)", &off);
+        ImGui::EndDisabled();
+        ImGui::TextWrapped("unavailable: %s", design_reason_.c_str());
+        return;
+    }
+
+    ImGui::Checkbox("Auto (LQR)", &auto_engaged_);
+    if (!auto_engaged_) {
+        ImGui::TextDisabled("gain ready - %d x %d, legs from %.1f deg",
+                            (int)design_.K.rows(), (int)design_.K.cols(),
+                            design_.home_leg_rad / kDeg);
+        return;
+    }
+
+    // A ball at rest anywhere on a flat plate is an equilibrium, so this
+    // setpoint needs no feedforward: it enters as a reference STATE and the
+    // regulator is already a tracker.  Bounded well inside the plate, since
+    // the edge is where the ball leaves.
+    const float lim = static_cast<float>((tk_.params().R_table - 0.05) * 1000.0);
+    ImGui::SliderFloat("set x [mm]", &sp_x_mm_, -lim, lim, "%.0f");
+    ImGui::SliderFloat("set y [mm]", &sp_y_mm_, -lim, lim, "%.0f");
+    if (ImGui::Button("Centre setpoint")) { sp_x_mm_ = 0.0f; sp_y_mm_ = 0.0f; }
+
+    const double err = std::hypot(ball_state_(0) - sp_x_mm_ * 1e-3,
+                                  ball_state_(1) - sp_y_mm_ * 1e-3);
+    ImGui::Text("error: %6.1f mm", err * 1000.0);
+
+    if (auto_saturated_) {
+        // Not a failure — the legs really do stop at 10 and 80 degrees.  But a
+        // tuning that lives against the stops is not the tuning that was
+        // designed, and the closed-loop poles on screen stop describing it.
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                           "leg command saturated");
+    }
 }
 
 void PlateView::drawScene(float aspect) {

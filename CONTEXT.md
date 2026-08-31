@@ -163,3 +163,65 @@ The plate is a **disc**, so the ball leaves it at a radius of
 `R_table - r_ball`.  `RollingBallDynamics::on_plate` tests the inscribed
 *square* and is wrong here; `ballOnPlate` is the test that matches the geometry
 being drawn.
+
+### Balance loop
+
+The closed loop that the LQR design surface exists to produce: `u = -K(x - x_ref)`
+evaluated once per frame against the **nonlinear** plate, in `auto_balance.h`.
+`x` is the cascade plant's state read straight off the simulator — three leg
+deviations from the linearisation point, then the ball's `[x, y, x', y']` in the
+plate frame — and `u` is a leg-angle command, so nothing adapts tilt to legs
+anywhere.
+
+Engaged from Plate Control, and only while the model panel is offering a gain
+that was solved against **this** plate: the right controller type, a successful
+solve, a `3 x 7` gain and a mechanism whose geometry matches.  Losing any of
+those drops the loop rather than freezing the last command, because a stale
+gain is not a controller.
+
+Decided in [#16](https://github.com/caliburn-engineering/caliburn/issues/16).
+
+> **The sliders and the loop cannot both be live.**
+> Plate Control's three servo sliders and `u = -Kx` write the same array, so
+> while the loop is engaged the sliders go read-only and keep displaying what
+> the controller is asking for — the most direct view of the loop working.
+> Steering moves to a **ball-position setpoint**, which is a quantity the
+> design actually regulates.  A ball at rest anywhere on a flat plate is an
+> equilibrium of this plant, so that setpoint enters as a reference state and
+> needs no feedforward at all: the regulator is already a tracker.
+
+### Leg command vs leg angle
+
+Two arrays, since the loop was closed.  `alpha_cmd_deg_` is what the sliders,
+the animation or the controller **ask for**; `alpha_deg_` is where the legs
+actually **are**, one first-order lag behind at the plant model's own `tau`.
+
+Before this the slider *was* the leg angle, and closing `u = -Kx` around that
+is an algebraic loop on the leg states — the gain would have been reacting to
+its own command one frame earlier.  The servo dynamics the cascade model claims
+had to become real in the simulator for the design to mean anything.
+
+The lag is integrated exactly, `alpha <- cmd + (alpha - cmd)*exp(-dt/tau)`, not
+by forward Euler: the plate runs at a fixed 60 Hz and tau defaults to 0.05 s,
+three steps per time constant, and the tau slider goes lower still.
+
+### Rolling-friction dead band
+
+`RollingBallDynamics` opposes motion with `c_rr * g * sign(v)`, so a plate
+tilted by less than `asin(c_rr) = 0.573 deg` **cannot start the ball moving at
+all**.  A state feedback has no integral term and therefore no way out: it
+parks the ball wherever the tilt it is asking for falls inside the band.
+
+This is not modelled in the linear plant at all, and it is why the LQR designer
+does not open on unit weights.  Under `Q = R = I` the residual is 37 mm off
+centre with the plate sitting at the dead-band edge — a loop that looks broken
+while behaving exactly as designed.  The residual scales inversely with the
+position gain, so the shipped default weights the ball position and lands
+inside 2 mm.  Both the good case and the dead band itself are pinned by
+`tests/test_auto_balance.cpp`; the number is not a memory.
+
+> **Not "stiction" and not "the loop has steady-state error".**
+> Stiction is a break-away force distinct from the sliding one, which this
+> model does not have.  And a steady-state error suggests a gain that could be
+> raised until it goes away — the band is a *region* of equilibria, and inside
+> it the loop is not converging slowly, it is not moving.

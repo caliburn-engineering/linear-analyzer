@@ -1,6 +1,7 @@
 // src/plate_view.h
 #pragma once
 
+#include "auto_balance.h"
 #include "ball_sim.h"
 #include "comparison_panel.h"
 #include "plot_panel.h"
@@ -9,6 +10,7 @@
 
 #include <Eigen/Core>
 #include <memory>
+#include <string>
 #include <vector>
 
 struct GLFWwindow;
@@ -55,15 +57,34 @@ public:
     /// Draw the 3D scene into the currently-set GL viewport.
     void drawScene(float aspect);
 
+    /// Hand over the design surface's current answer, once per frame.
+    ///
+    /// `offered` is the caller's claim — that LQR is the selected controller,
+    /// that the solve succeeded, and that the plant it was solved against is
+    /// the cascade.  Only the model panel can know any of that.  The plate
+    /// adds the two checks it alone can make, the gain's shape and whether the
+    /// mechanism in `d` is the one being simulated, and states its own reason
+    /// when either fails.
+    ///
+    /// `d.servo_tau` is honoured whether or not the design is offered: the
+    /// legs have first-order lag in manual driving too, and the model panel's
+    /// tau slider is the one place that number lives.
+    void setDesign(const AutoBalanceDesign& d, bool offered,
+                   const std::string& reason);
+
     /// Camera orbiting, for the scroll callback.
     OrbitCamera& camera() { return camera_; }
 
 private:
     void drawControls();
+    void drawBalanceControls();
     void drawMechanism();
     void resetAll();
     void resetBall();
     void setAllServos(float degrees);
+
+    /// True when the design on hand can actually drive this plate.
+    bool designUsable() const;
 
     TableKinematics tk_;
     RollingBallDynamics ball_dynamics_;
@@ -71,8 +92,26 @@ private:
     std::unique_ptr<LineRenderer> renderer_;
 
     // --- Servos ---
+    // Two arrays, since the loop was closed: `alpha_cmd_deg_` is what the
+    // sliders, the animation or the controller ASK for, `alpha_deg_` is where
+    // the legs actually are.  Before the split the slider *was* the leg angle,
+    // and u = -Kx around that is an algebraic loop on the leg states — the
+    // servo lag the plant model claims had to become real.
+    //
+    // While the loop is closed the controller writes the command array, so the
+    // (disabled) sliders read out what it is doing.
+    float alpha_cmd_deg_[3] = {45.0f, 45.0f, 45.0f};
     float alpha_deg_[3] = {45.0f, 45.0f, 45.0f};
     bool link_servos_ = false;
+
+    // --- Balance loop ---
+    AutoBalanceDesign design_{};
+    bool design_offered_ = false;
+    std::string design_reason_ = "select LQR as the controller type";
+    bool auto_engaged_ = false;
+    bool auto_saturated_ = false;
+    float sp_x_mm_ = 0.0f;  // ball setpoint, plate frame
+    float sp_y_mm_ = 0.0f;
 
     // --- Camera ---
     OrbitCamera camera_;

@@ -129,6 +129,7 @@ target_include_directories(kinematics PUBLIC src)
 target_link_libraries(kinematics PUBLIC Eigen3::Eigen)
 
 add_library(ball_dynamics STATIC
+    src/auto_balance.cpp
     src/ball_sim.cpp
     src/ball_plant_linear.cpp
     src/comparison_sim.cpp
@@ -200,6 +201,11 @@ if(NOT EMSCRIPTEN)
     target_link_libraries(test_ball_sim PRIVATE ball_dynamics)
     target_include_directories(test_ball_sim PRIVATE tests)
     add_test(NAME test_ball_sim COMMAND test_ball_sim)
+
+    add_executable(test_auto_balance tests/test_auto_balance.cpp)
+    target_link_libraries(test_auto_balance PRIVATE ball_dynamics)
+    target_include_directories(test_auto_balance PRIVATE tests)
+    add_test(NAME test_auto_balance COMMAND test_auto_balance)
 endif()
 
 # --- Visualizer executable ---
