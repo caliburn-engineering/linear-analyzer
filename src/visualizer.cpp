@@ -24,23 +24,13 @@
 #include "panels/nyquist_panel.h"
 #include "panels/time_response_panel.h"
 
-// The plate half of the application is desktop-only for now.  Its shaders are
-// desktop GLSL and the web port is issue #15; guarding it here keeps the
-// published WASM demo building exactly what it built before the merge.
-#ifndef __EMSCRIPTEN__
 #include "plate_view.h"
-constexpr bool kPlateEnabled = true;
-#else
-constexpr bool kPlateEnabled = false;
-#endif
 
 struct FrameContext {
     GLFWwindow* window;
     caliburn::AppState* state;
     std::vector<caliburn::ModelEntry>* presets;
-#ifndef __EMSCRIPTEN__
     caliburn::PlateView* plate;
-#endif
 };
 
 // One dockspace for both panel sets.  Built once, and only when ImGui has no
@@ -88,15 +78,14 @@ static void render_frame(void* arg) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-#ifndef __EMSCRIPTEN__
     // After NewFrame, which is what computes io.WantCaptureMouse: the plate
     // arbitrates its orbit drag on that flag, and stepping earlier read the
     // previous frame's answer.
     //
-    // Fixed step, as the plate view has always used: vsync holds the frame rate
-    // at 60 Hz and a fixed step keeps the ball's trajectory reproducible.
+    // Fixed step, as the plate view has always used: vsync on the desktop and
+    // requestAnimationFrame on the web both hold the frame rate at 60 Hz, and a
+    // fixed step keeps the ball's trajectory reproducible.
     ctx->plate->step(window, 1.0f / 60.0f);
-#endif
 
     // --- Full-viewport dockspace ---
     ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -104,7 +93,7 @@ static void render_frame(void* arg) {
     static bool layout_checked = false;
     static int focus_defaults_frames_left = 0;
     static int place_toggles_frames_left = 0;
-    if (kPlateEnabled && !layout_checked) {
+    if (!layout_checked) {
         layout_checked = true;
         if (ImGui::DockBuilderGetNode(dock_id) == nullptr) {
             buildDefaultLayout(dock_id, vp->WorkSize);
@@ -438,7 +427,7 @@ static void render_frame(void* arg) {
     // --- Panel toggle bar ---
     // Floating, and parked in the corner of the central node: anywhere else and
     // its default position lands on top of the model panel.
-    if (kPlateEnabled && place_toggles_frames_left > 0) {
+    if (place_toggles_frames_left > 0) {
         const ImGuiDockNode* centre = ImGui::DockBuilderGetCentralNode(dock_id);
         if (centre && centre->Size.x > 0.0f) {
             --place_toggles_frames_left;
@@ -473,11 +462,9 @@ static void render_frame(void* arg) {
     caliburn::drawBodePanel(state);
     caliburn::drawNyquistPanel(state);
     caliburn::drawTimeResponsePanel(state);
-#ifndef __EMSCRIPTEN__
     ctx->plate->drawPanels();
-#endif
 
-    if (kPlateEnabled && focus_defaults_frames_left > 0) {
+    if (focus_defaults_frames_left > 0) {
         --focus_defaults_frames_left;
         ImGui::SetWindowFocus("Plate Plots");
     }
@@ -490,7 +477,6 @@ static void render_frame(void* arg) {
     glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-#ifndef __EMSCRIPTEN__
     // The 3D scene is drawn into the central dock node rather than the whole
     // framebuffer, so the plate stays centred in the space the panels leave
     // rather than hiding behind them.
@@ -511,7 +497,6 @@ static void render_frame(void* arg) {
             glViewport(0, 0, fb_w, fb_h);
         }
     }
-#endif
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
@@ -536,9 +521,7 @@ int main() {
 #endif
 
     GLFWwindow* window = glfwCreateWindow(
-        1600, 1000,
-        kPlateEnabled ? "Ball-Balancer \xe2\x80\x94 Caliburn"
-                      : "Linear System Analyzer \xe2\x80\x94 Caliburn",
+        1600, 1000, "Ball-Balancer \xe2\x80\x94 Caliburn",
         nullptr, nullptr);
     if (!window) { glfwTerminate(); return 1; }
 
@@ -590,12 +573,13 @@ int main() {
     style.FrameRounding = 4.0f;
     style.GrabRounding = 4.0f;
 
-#ifndef __EMSCRIPTEN__
     // Constructed before the ImGui backend so that its scroll callback is the
     // *previous* one, which the backend chains to instead of replacing.
-    caliburn::PlateView plate;
+    //
+    // static, like everything else the frame callback reaches through: see the
+    // main loop below.
+    static caliburn::PlateView plate;
     plate.attach(window);
-#endif
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
 #ifdef __EMSCRIPTEN__
@@ -605,8 +589,8 @@ int main() {
 #endif
 
     // --- Init app state ---
-    caliburn::AppState state;
-    auto presets = caliburn::getBuiltinModels();
+    static caliburn::AppState state;
+    static auto presets = caliburn::getBuiltinModels();
     state.preset_index = caliburn::defaultModelIndex(presets);
     state.plant = presets[state.preset_index].system;
     state.current_params = presets[state.preset_index].params;
@@ -617,30 +601,40 @@ int main() {
     caliburn::extractTFFromSS(state);
 
 #ifndef __EMSCRIPTEN__
+    // Neither enum exists in ES 3.0; WebGL2 multisamples the default
+    // framebuffer on its own and has no line-smoothing knob at all.
     glEnable(GL_MULTISAMPLE);
     glEnable(GL_LINE_SMOOTH);
-    plate.initGL();
 #endif
+    plate.initGL();
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     // --- Main loop ---
+    //
+    // static, not automatic.  emscripten_set_main_loop_arg with
+    // simulate_infinite_loop escapes main by throwing, and every frame after
+    // that reads the app through this pointer — so ctx and everything it points
+    // at have to outlive main's frame.  Whether the runtime leaves the shadow
+    // stack pointer where main left it is an implementation detail of the
+    // unwind, and one static keyword is cheaper than depending on the answer.
+    static FrameContext ctx{window, &state, &presets, &plate};
 #ifdef __EMSCRIPTEN__
-    FrameContext ctx{window, &state, &presets};
     emscripten_set_main_loop_arg(render_frame, &ctx, 0, true);
 #else
-    FrameContext ctx{window, &state, &presets, &plate};
     while (!glfwWindowShouldClose(window)) {
         render_frame(&ctx);
     }
 #endif
 
     // --- Cleanup ---
-#ifndef __EMSCRIPTEN__
+    // Unreachable on the web rather than excluded from it: the main loop is
+    // installed with simulate_infinite_loop, so main never returns there and
+    // the browser tears the context down for us.
+    //
     // Before the context goes away: ~LineRenderer calls glDeleteBuffers, and
     // running that after glfwTerminate is undefined.
     plate.shutdownGL();
-#endif
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImPlot::DestroyContext();

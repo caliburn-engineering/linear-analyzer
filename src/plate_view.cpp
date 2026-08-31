@@ -1,7 +1,9 @@
 // src/plate_view.cpp
 #include "plate_view.h"
 
-#include <glad/glad.h>
+// No GL header here: this file makes no GL calls of its own, and renderer.h
+// (via plate_view.h) is the one place that decides between GLAD and Emscripten's
+// ES 3.0 headers.
 #include <GLFW/glfw3.h>
 #include "imgui.h"
 

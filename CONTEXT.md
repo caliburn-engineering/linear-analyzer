@@ -124,8 +124,15 @@ Drawn into the **central dock node**, which is deliberately left empty so the
 passthru dockspace shows the scene through it.  A window docked there would
 paint over the plate.
 
-Desktop only.  The Emscripten build compiles the analyzer half alone until the
-web port (issue #15).
+Both targets since [#15](https://github.com/caliburn-engineering/caliburn/issues/15).
+The renderer draws through the GL subset shared by OpenGL 3.3 core and WebGL2 —
+vertex arrays, buffer objects, array draws — so the port was the shaders and
+nothing else: `#version 330 core` and `#version 300 es` plus a precision
+qualifier, supplied as a separate source string ahead of one shared body.
+
+`glLineWidth` above 1.0 is honoured or ignored at the driver's discretion under
+WebGL2, so line weight is decorative here and carries no information: every
+element of the scene is told apart by colour.
 
 ### Tilt convention (phi/theta vs alpha/beta)
 

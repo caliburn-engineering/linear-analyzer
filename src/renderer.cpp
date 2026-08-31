@@ -7,8 +7,28 @@
 // Shaders
 // ============================================================================
 
+// One shader body for both targets, with the dialect supplied as a separate
+// source string.  The bodies below are already legal in both GLSL 3.30 and
+// GLSL ES 3.00 — `layout(location = ...)` on vertex inputs and a user-declared
+// fragment output are in both — so only the version line and the ES precision
+// qualifiers differ, and they are the whole of the difference.
+//
+// ES has no default precision for `float` in a fragment shader: omit the
+// qualifier and the shader fails to compile.  Under WebGL that failure is
+// silent, and presents as a black canvas with nothing but a console message.
+// The vertex stage does default to highp and would compile without it, but the
+// prologue is one string for both stages — stating the precision that stage
+// already has is free, and splitting the prologue in two to avoid saying it
+// would only invite the halves to drift.
+#ifdef __EMSCRIPTEN__
+static const char* shader_prologue =
+    "#version 300 es\n"
+    "precision highp float;\n";
+#else
+static const char* shader_prologue = "#version 330 core\n";
+#endif
+
 static const char* vertex_shader_src = R"(
-#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec4 aColor;
 uniform mat4 uVP;
@@ -20,7 +40,6 @@ void main() {
 )";
 
 static const char* fragment_shader_src = R"(
-#version 330 core
 in vec4 vColor;
 out vec4 FragColor;
 void main() {
@@ -34,7 +53,8 @@ void main() {
 
 GLuint LineRenderer::compile_shader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &source, nullptr);
+    const char* sources[] = {shader_prologue, source};
+    glShaderSource(shader, 2, sources, nullptr);
     glCompileShader(shader);
 
     GLint success;
@@ -209,7 +229,15 @@ void LineRenderer::flush() {
         glDepthMask(GL_TRUE);   // Re-enable for lines
     }
 
-    // Draw lines on top
+    // Draw lines on top.
+    //
+    // Line width under WebGL2 is the driver's to honour: issue #11 assumed it
+    // was silently ignored above 1.0, and on this machine's Chrome it is not —
+    // ALIASED_LINE_WIDTH_RANGE reads [1, 10] and the widths below rasterize.
+    // Elsewhere the range is [1, 1] and every line comes out one pixel.  Both
+    // are conforming, so width is decorative here and carries no information:
+    // every element of the scene is told apart by colour, and reads correctly
+    // at a uniform 1 px.  Measured on the web build for #15.
     for (const auto& batch : batches_) {
         if (batch.vertices.empty()) continue;
 

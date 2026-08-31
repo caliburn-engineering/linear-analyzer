@@ -117,13 +117,10 @@ target_include_directories(analysis_lib PUBLIC
 )
 target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen kinematics)
 
-# --- Plate libraries (desktop only) ---
-# The Emscripten build is untouched by the ball-balancer merge (issue #13); the
-# web port is issue #15.  Everything the plate view needs is fenced off here so
-# the published WASM demo keeps building exactly what it built before.
-# The 3-RRS kinematics are portable (Eigen and the standard library only) and
-# the cascade plant in the model library is built from them, so they are not
-# fenced to desktop even though the 3D view is.
+# --- Plate libraries ---
+# Both targets, since issue #15: the kinematics, the rolling dynamics and the
+# linearised plant are Eigen and the standard library only, so nothing here
+# needed porting — only the renderer's shaders did.
 add_library(kinematics STATIC
     src/table_kinematics.cpp
     src/trajectory_validator.cpp
@@ -131,21 +128,19 @@ add_library(kinematics STATIC
 target_include_directories(kinematics PUBLIC src)
 target_link_libraries(kinematics PUBLIC Eigen3::Eigen)
 
-if(NOT EMSCRIPTEN)
-    add_library(ball_dynamics STATIC
-        src/ball_sim.cpp
-        src/ball_plant_linear.cpp
-        src/comparison_sim.cpp
-        ${CALIBURN_REFERENCE}/simulation/rolling_dynamics.cpp
-        ${CALIBURN_REFERENCE}/models/linearizer.cpp
-    )
-    target_include_directories(ball_dynamics PUBLIC
-        src
-        ${CALIBURN_REFERENCE}/simulation
-    )
-    # analysis_lib carries rk4 and LinearSystem for both halves of the app.
-    target_link_libraries(ball_dynamics PUBLIC analysis_lib kinematics)
-endif()
+add_library(ball_dynamics STATIC
+    src/ball_sim.cpp
+    src/ball_plant_linear.cpp
+    src/comparison_sim.cpp
+    ${CALIBURN_REFERENCE}/simulation/rolling_dynamics.cpp
+    ${CALIBURN_REFERENCE}/models/linearizer.cpp
+)
+target_include_directories(ball_dynamics PUBLIC
+    src
+    ${CALIBURN_REFERENCE}/simulation
+)
+# analysis_lib carries rk4 and LinearSystem for both halves of the app.
+target_link_libraries(ball_dynamics PUBLIC analysis_lib kinematics)
 
 # --- Tests (desktop only) ---
 if(NOT EMSCRIPTEN)
@@ -208,7 +203,7 @@ if(NOT EMSCRIPTEN)
 endif()
 
 # --- Visualizer executable ---
-set(VISUALIZER_SOURCES
+add_executable(visualizer
     src/visualizer.cpp
     src/panels/model_panel.cpp
     src/panels/properties_panel.cpp
@@ -216,20 +211,22 @@ set(VISUALIZER_SOURCES
     src/panels/bode_panel.cpp
     src/panels/nyquist_panel.cpp
     src/panels/time_response_panel.cpp
+    src/plate_view.cpp
+    src/renderer.cpp
+    src/plot_panel.cpp
+    src/comparison_panel.cpp
 )
-if(NOT EMSCRIPTEN)
-    list(APPEND VISUALIZER_SOURCES
-        src/plate_view.cpp
-        src/renderer.cpp
-        src/plot_panel.cpp
-        src/comparison_panel.cpp
-    )
-endif()
-
-add_executable(visualizer ${VISUALIZER_SOURCES})
 
 if(EMSCRIPTEN)
-    target_link_libraries(visualizer PRIVATE analysis_lib imgui implot)
+    # GLFW, the GL headers and the ES 3.0 entry points all come from Emscripten
+    # ports, so the web link needs no glad and no OpenGL::GL.
+    target_link_libraries(visualizer PRIVATE
+        analysis_lib
+        ball_dynamics
+        kinematics
+        imgui
+        implot
+    )
     target_link_options(visualizer PRIVATE
         -sUSE_GLFW=3
         -sUSE_WEBGL2=1

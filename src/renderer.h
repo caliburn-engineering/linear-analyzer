@@ -1,6 +1,12 @@
 #pragma once
 
+// GL headers: GLAD on the desktop, Emscripten's own ES 3.0 headers on the
+// web.  Everything below is the portable subset WebGL2 also provides.
+#ifdef __EMSCRIPTEN__
+#include <GLES3/gl3.h>
+#else
 #include <glad/glad.h>
+#endif
 #include <Eigen/Dense>
 #include <vector>
 #include <array>
@@ -22,7 +28,8 @@ struct ColorVertex {
     float r, g, b, a;
 };
 
-/// Simple line renderer using OpenGL 3.3 core
+/// Simple line renderer over the GL subset shared by OpenGL 3.3 core and
+/// WebGL2: vertex arrays, buffer objects and array draws.
 class LineRenderer {
 public:
     LineRenderer();
