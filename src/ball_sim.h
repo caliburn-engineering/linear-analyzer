@@ -8,6 +8,16 @@
 
 namespace caliburn {
 
+/// The ball the plate simulates: 40 mm across, 50 g, and rolling resistance of
+/// one percent.
+///
+/// One definition, because the resistance is not decoration.  It is a Coulomb
+/// term, so a plate tilted by less than `asin(0.01) = 0.573 deg` cannot start
+/// the ball moving at all — the dead band a state feedback has no integral
+/// term to escape.  A test that asserts where the loop stalls and a simulator
+/// that stalls somewhere else would both be self-consistent and disagree.
+inline constexpr BallParams kPlateBall{0.020, 0.050, 0.01};
+
 /// Tilt angles as the rolling-ball model names them: `alpha` is the tilt that
 /// drives the ball along y, `beta` the tilt that drives it along x.
 struct BallTilt {

@@ -30,9 +30,17 @@ namespace {
 
 constexpr double kDeg = M_PI / 180.0;
 constexpr double kHome = 45.0 * kDeg;
-constexpr double kBallRadius = 0.02;
-constexpr double kBallMass = 0.05;
-constexpr double kBallFriction = 0.01;
+// The simulator's ball, not a copy of it: the dead-band assertion below is a
+// claim about this exact rolling resistance.
+constexpr double kBallRadius = kPlateBall.radius;
+constexpr double kBallFriction = kPlateBall.rolling_friction;
+
+const ModelEntry& cascadeModel(const std::vector<ModelEntry>& models) {
+    for (const auto& m : models)
+        if (isCascadeModel(m)) return m;
+    std::fprintf(stderr, "FAIL: no cascade model in the library\n");
+    std::exit(1);
+}
 
 AutoBalanceDesign designWith(const Eigen::MatrixXd& K) {
     AutoBalanceDesign d;
@@ -85,26 +93,29 @@ void test_shape_gate() {
 // `double` literals.  0.300f widened is 0.3000000119, so a comparison tight
 // enough to be called exact refuses two mechanisms that are the same object —
 // and the balance loop then never becomes available at all.
-void test_mechanism_identity_survives_the_float_round_trip() {
+void test_plant_identity_survives_the_float_round_trip() {
     TableParams plate;
     plate.R_ground = 0.300;
     plate.R_table = 0.300;
     plate.L1 = 0.150;
     plate.L2 = 0.150;
 
-    TableParams from_sliders;
-    from_sliders.R_ground = static_cast<double>(0.300f);
-    from_sliders.R_table = static_cast<double>(0.300f);
-    from_sliders.L1 = static_cast<double>(0.150f);
-    from_sliders.L2 = static_cast<double>(0.150f);
-    ASSERT_TRUE(sameMechanism(plate, from_sliders));
+    // Exactly how the model panel's float sliders reach `cascadeMechanism`.
+    const auto models = getBuiltinModels();
+    const TableParams from_sliders = cascadeMechanism(cascadeModel(models).params);
+    ASSERT_TRUE(samePlant(plate, 9.81, from_sliders, 9.81));
 
-    // A millimetre of leg, however, is a different mechanism.
-    from_sliders.L1 = 0.151;
-    ASSERT_TRUE(!sameMechanism(plate, from_sliders));
+    // A millimetre of leg, however, is a different plate.
+    TableParams longer = from_sliders;
+    longer.L1 = 0.151;
+    ASSERT_TRUE(!samePlant(plate, 9.81, longer, 9.81));
+
+    // And so is the same plate on the moon — the gain would be solved for an
+    // acceleration the simulated ball never feels.
+    ASSERT_TRUE(!samePlant(plate, 9.81, from_sliders, 1.62));
 
     // A design nobody filled in is all zeros, and matches nothing.
-    ASSERT_TRUE(!sameMechanism(plate, TableParams{}));
+    ASSERT_TRUE(!samePlant(plate, 9.81, TableParams{}, 0.0));
 }
 
 void test_zero_error_commands_the_home_pose() {
@@ -203,31 +214,6 @@ void test_servo_lag_is_first_order() {
 // Layer 2: the loop, closed around the nonlinear plate
 // ---------------------------------------------------------------------------
 
-const ModelEntry& cascadeModel(const std::vector<ModelEntry>& models) {
-    for (const auto& m : models)
-        if (m.name.rfind("Ball-Balancer Cascade", 0) == 0) return m;
-    std::fprintf(stderr, "FAIL: no cascade model in the library\n");
-    std::exit(1);
-}
-
-double paramValue(const ModelEntry& e, const std::string& symbol) {
-    for (const auto& p : e.params)
-        if (p.symbol == symbol) return p.value;
-    std::fprintf(stderr, "FAIL: no parameter '%s'\n", symbol.c_str());
-    std::exit(1);
-}
-
-TableParams tableParamsOf(const ModelEntry& e) {
-    TableParams tp;
-    tp.R_ground  = paramValue(e, "Rg");
-    tp.R_table   = paramValue(e, "Rt");
-    tp.L1        = paramValue(e, "L1");
-    tp.L2        = paramValue(e, "L2");
-    tp.alpha_min = 10.0 * kDeg;
-    tp.alpha_max = 80.0 * kDeg;
-    return tp;
-}
-
 struct SimResult {
     double final_radius;   // [m] distance of the ball from its setpoint
     double peak_radius;    // [m]
@@ -245,19 +231,18 @@ SimResult runClosedLoop(const ModelEntry& e,
                         double x_sp,
                         double y_sp,
                         double duration) {
-    const TableParams tp = tableParamsOf(e);
+    const TableParams tp = cascadeMechanism(e.params);
     const TableKinematics tk(tp);
 
     AutoBalanceDesign d;
     d.K = K;
-    d.home_leg_rad = paramValue(e, "a0") * kDeg;
-    d.servo_tau = paramValue(e, "\xcf\x84");
+    d.home_leg_rad = cascadeHomeLegAngle(e.params);
+    d.servo_tau = cascadeServoTau(e.params);
     d.alpha_min_rad = tp.alpha_min;
     d.alpha_max_rad = tp.alpha_max;
 
     const RollingBallDynamics dynamics(
-        BallParams{kBallRadius, kBallMass, kBallFriction},
-        PlateParams{tp.R_table, paramValue(e, "g")});
+        kPlateBall, PlateParams{tp.R_table, cascadeGravity(e.params)});
 
     std::array<double, 3> alpha = {d.home_leg_rad, d.home_leg_rad, d.home_leg_rad};
     Eigen::Vector4d ball = ball0;
@@ -378,27 +363,35 @@ void test_looser_weights_are_visibly_sluggish() {
     ASSERT_TRUE(loose.settle_time > 4.0 * base.settle_time);
 }
 
-// The third acceptance criterion, as a number.  Legs priced a hundred thousand
-// times above the ball buys a controller that will barely move them: the plate
-// stays flat to a hundredth of a degree, and the ball simply stays where it
-// was put — and rolls straight off if it is nudged.
+// The third acceptance criterion, as a number.  Legs priced a thousand times
+// above the ball buys a controller that will barely move them: it stalls the
+// plate inside the friction dead band and the ball simply stays where it was
+// put, or wanders half the plate away when it is kicked.
+//
+// R = 1000 is the top of the model panel's own slider, deliberately.  A test
+// that proved degradation at 1e5 would be proving it about a tuning nobody can
+// reach through the UI, which is not the criterion.  Every number below is
+// against the good case measured in the two tests above: 1.1 mm and 1.8 s from
+// the same displacement, 81 mm of peak and 2.2 s from the same kick.
 void test_poor_tuning_visibly_degrades() {
     const auto models = getBuiltinModels();
     const auto& e = cascadeModel(models);
 
-    Eigen::VectorXd r_poor(3);
-    r_poor << 1e5, 1e5, 1e5;
-    const Eigen::MatrixXd K_poor =
-        gainFor(e, defaultLqrStateWeights(7), r_poor);
+    const Eigen::MatrixXd K_poor = gainFor(
+        e, defaultLqrStateWeights(7), Eigen::VectorXd::Constant(3, 1000.0));
 
     const SimResult held = runClosedLoop(e, K_poor, kDisplaced, 0.0, 0.0, 20.0);
-    ASSERT_TRUE(held.settle_time < 0.0);          // never settles
-    ASSERT_TRUE(held.final_radius > 0.05);        // and never really tried
-    ASSERT_TRUE(held.final_tilt_deg < 0.1);
+    ASSERT_TRUE(held.settle_time < 0.0);    // never settles, in twenty seconds
+    ASSERT_TRUE(held.final_radius > 0.05);  // and never really tried
+    // Stalled inside the dead band rather than converging slowly: the tilt it
+    // is asking for is one the ball cannot be started by.
+    ASSERT_TRUE(held.final_tilt_deg < std::asin(kBallFriction) / kDeg);
 
     const SimResult kicked = runClosedLoop(
         e, K_poor, Eigen::Vector4d(0.0, 0.0, 0.35, 0.25), 0.0, 0.0, 20.0);
-    ASSERT_TRUE(kicked.left_plate);
+    ASSERT_TRUE(kicked.peak_radius > 0.12);   // half the plate, against 81 mm
+    ASSERT_TRUE(kicked.settle_time < 0.0);
+    ASSERT_TRUE(kicked.final_radius > 0.05);
 }
 
 // Why the defaults above are not unit weights, kept as a fact rather than a
@@ -431,7 +424,7 @@ int main() {
     test_state_vector_layout();
     test_state_deviation_follows_the_design_home();
     test_shape_gate();
-    test_mechanism_identity_survives_the_float_round_trip();
+    test_plant_identity_survives_the_float_round_trip();
     test_zero_error_commands_the_home_pose();
     test_command_is_home_minus_k_error();
     test_setpoint_moves_the_target();

@@ -11,18 +11,21 @@ constexpr int kStates = 7;
 constexpr int kLegs = 3;
 }  // namespace
 
-bool sameMechanism(const TableParams& a, const TableParams& b) {
+bool samePlant(const TableParams& a, double g_a,
+               const TableParams& b, double g_b) {
     // A micron, not an epsilon.  The model's geometry arrives as `float`
     // sliders and the plate's is a `double` literal, so 0.300 and 0.300 differ
-    // in the twelfth digit and an exact-ish comparison refuses two mechanisms
-    // that are the same object.  A micron is below anything the sliders can
-    // express and far above the round-trip.
+    // in the twelfth digit and an exact-ish comparison refuses two plates that
+    // are the same object.  A micron is below anything the sliders can express
+    // and far above the round-trip; the same argument sizes the gravity
+    // tolerance, in m/s^2.
     const double tol = 1e-6;
     return std::abs(a.R_ground - b.R_ground) < tol &&
            std::abs(a.R_table - b.R_table) < tol &&
            std::abs(a.L1 - b.L1) < tol &&
            std::abs(a.L2 - b.L2) < tol &&
-           std::abs(a.gamma_offset - b.gamma_offset) < tol;
+           std::abs(a.gamma_offset - b.gamma_offset) < tol &&
+           std::abs(g_a - g_b) < tol;
 }
 
 bool gainFitsCascade(const AutoBalanceDesign& d) {

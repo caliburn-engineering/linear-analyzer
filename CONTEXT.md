@@ -175,9 +175,19 @@ anywhere.
 
 Engaged from Plate Control, and only while the model panel is offering a gain
 that was solved against **this** plate: the right controller type, a successful
-solve, a `3 x 7` gain and a mechanism whose geometry matches.  Losing any of
-those drops the loop rather than freezing the last command, because a stale
-gain is not a controller.
+solve, a `3 x 7` gain, a ball actually being simulated, and a plant whose
+geometry *and gravity* match the simulated one.  Gravity is a cascade parameter
+and the plate's is fixed, so a gain designed on the moon is exactly as wrong as
+one designed for longer legs and is refused the same way.  Losing any of those
+drops the loop rather than freezing the last command, because a stale gain is
+not a controller — and `setDesign` is the single place that drop happens, so a
+draw pass cannot disagree with the step about who is driving.
+
+The plant a cascade parameter list describes is built by `cascadeMechanism` /
+`cascadeGravity` / `cascadeServoTau` / `cascadeHomeLegAngle`, and the model
+builder, the application and the tests all read those same functions.  A second
+transcription is how the check comes to reject two identical plates — it did,
+once, over a `float` slider widening to `0.3000000119`.
 
 Decided in [#16](https://github.com/caliburn-engineering/caliburn/issues/16).
 
@@ -195,6 +205,14 @@ Decided in [#16](https://github.com/caliburn-engineering/caliburn/issues/16).
 Two arrays, since the loop was closed.  `alpha_cmd_deg_` is what the sliders,
 the animation or the controller **ask for**; `alpha_deg_` is where the legs
 actually **are**, one first-order lag behind at the plant model's own `tau`.
+
+The lag applies to **every** writer, not just the loop.  It is a property of
+the plate rather than of the controller, and making it conditional would mean
+the manual plate and the modelled plate are two different machines.  Home/Low/
+High therefore command rather than teleport, and the Animation amplitude is the
+amplitude *asked for* — attenuated about 1% at its default 0.5 Hz, which is
+what a real servo does.  `snapServos` is the one path that writes both arrays,
+because a reset is not driving anything.
 
 Before this the slider *was* the leg angle, and closing `u = -Kx` around that
 is an algebraic loop on the leg states — the gain would have been reacting to

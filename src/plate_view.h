@@ -9,6 +9,7 @@
 #include "table_kinematics.h"
 
 #include <Eigen/Core>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -81,10 +82,25 @@ private:
     void drawMechanism();
     void resetAll();
     void resetBall();
-    void setAllServos(float degrees);
+
+    /// Command all three legs to one angle.  A command, not a teleport: the
+    /// Home/Low/High buttons ask, and the legs arrive one lag later like every
+    /// other command.  `snapServos` is the reset path, which has no lag to
+    /// respect because it is not driving anything.
+    void commandAllServos(float degrees);
+    void snapServos(float degrees);
+
+    /// Where the legs actually are, in radians — the argument every kinematics
+    /// call wants, assembled in one place instead of five.
+    std::array<double, 3> legsRad() const;
 
     /// True when the design on hand can actually drive this plate.
     bool designUsable() const;
+
+    /// True while the balance loop, and not the sliders, owns the leg command.
+    /// The single authority: `step` acts on it and `drawControls` greys the
+    /// manual controls on it, so the two cannot disagree about who is driving.
+    bool loopDriving() const;
 
     TableKinematics tk_;
     RollingBallDynamics ball_dynamics_;
@@ -108,8 +124,8 @@ private:
     AutoBalanceDesign design_{};
     bool design_offered_ = false;
     std::string design_reason_ = "select LQR as the controller type";
-    bool auto_engaged_ = false;
-    bool auto_saturated_ = false;
+    bool balance_engaged_ = false;
+    bool balance_saturated_ = false;
     float sp_x_mm_ = 0.0f;  // ball setpoint, plate frame
     float sp_y_mm_ = 0.0f;
 

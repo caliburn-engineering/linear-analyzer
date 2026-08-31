@@ -34,17 +34,21 @@ struct AutoBalanceDesign {
     double alpha_min_rad = 10.0 * M_PI / 180.0;
     double alpha_max_rad = 80.0 * M_PI / 180.0;
 
-    /// The mechanism the gain was designed against.  The model panel's
-    /// geometry sliders move it and the simulated plate's geometry does not
-    /// follow, so a gain designed for longer legs is not wrong-shaped — it is
+    /// The plant the gain was designed against.  The model panel's physical
+    /// sliders move it and the simulated plate does not follow, so a gain
+    /// designed for longer legs — or for the moon — is not wrong-shaped, it is
     /// simply wrong, and nothing downstream could tell.  Default-constructed
     /// to zeros, so a design nobody filled in is refused rather than trusted.
     TableParams mechanism{};
+    double gravity = 0.0;  ///< [m/s^2]; zero is "unset", never a real plant
 };
 
-/// Do two mechanisms describe the same plate?  Geometry only: `alpha_min` and
-/// `alpha_max` are travel limits, not shape, and the design carries its own.
-bool sameMechanism(const TableParams& a, const TableParams& b);
+/// Do two designs describe the same plate?  Geometry and gravity: the shape
+/// the legs make and the acceleration acting on the ball are independent, and
+/// getting either wrong is the same silent failure.  `alpha_min`/`alpha_max`
+/// are travel limits rather than shape, and are not compared.
+bool samePlant(const TableParams& a, double g_a,
+               const TableParams& b, double g_b);
 
 /// True when `d.K` has the shape the cascade plant's state feedback must have.
 /// Shape is necessary, not sufficient — the caller also has to know the plant

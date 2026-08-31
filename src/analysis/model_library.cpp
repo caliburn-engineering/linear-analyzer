@@ -16,6 +16,53 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 }
 
+namespace {
+
+// The cascade's parameter list, read by symbol.  By symbol and not by index:
+// the list is edited by hand and a reordered entry would otherwise silently
+// swap two physical quantities.
+double cascadeParam(const std::vector<PhysicalParam>& params,
+                    const char* symbol, double fallback) {
+    for (const auto& p : params)
+        if (p.symbol == symbol) return static_cast<double>(p.value);
+    return fallback;
+}
+
+// The servo travel the mechanism is built with.  Fixed rather than exposed:
+// they are the hardware's limits, not a design choice, and the plate view and
+// the model have to agree on them for a saturating command to mean anything.
+constexpr double kAlphaMin = 10.0 * kPi / 180.0;
+constexpr double kAlphaMax = 80.0 * kPi / 180.0;
+
+}  // namespace
+
+bool isCascadeModel(const ModelEntry& entry) {
+    return entry.name.rfind("Ball-Balancer Cascade", 0) == 0;
+}
+
+TableParams cascadeMechanism(const std::vector<PhysicalParam>& params) {
+    TableParams tp;
+    tp.R_ground  = cascadeParam(params, "Rg", 0.300);
+    tp.R_table   = cascadeParam(params, "Rt", 0.300);
+    tp.L1        = cascadeParam(params, "L1", 0.150);
+    tp.L2        = cascadeParam(params, "L2", 0.150);
+    tp.alpha_min = kAlphaMin;
+    tp.alpha_max = kAlphaMax;
+    return tp;
+}
+
+double cascadeGravity(const std::vector<PhysicalParam>& params) {
+    return cascadeParam(params, "g", 9.81);
+}
+
+double cascadeServoTau(const std::vector<PhysicalParam>& params) {
+    return std::max(1e-3, cascadeParam(params, "\xcf\x84", 0.05));
+}
+
+double cascadeHomeLegAngle(const std::vector<PhysicalParam>& params) {
+    return cascadeParam(params, "a0", 45.0) * kPi / 180.0;
+}
+
 int defaultModelIndex(const std::vector<ModelEntry>& models) {
     for (std::size_t i = 0; i < models.size(); ++i)
         if (models[i].name == "Ball-Balancer Cascade") return static_cast<int>(i);
@@ -322,20 +369,15 @@ std::vector<ModelEntry> getBuiltinModels() {
         };
 
         entry.builder = [](const std::vector<PhysicalParam>& p) -> LinearSystem {
-            const double g     = p[0].value;
-            const double tau   = std::max(1e-3, (double)p[1].value);
-            const double a0    = p[6].value * kPi / 180.0;
+            const double g     = cascadeGravity(p);
+            const double tau   = cascadeServoTau(p);
+            const double a0    = cascadeHomeLegAngle(p);
             constexpr double k = 5.0 / 7.0;  // solid sphere rolling factor
 
-            TableParams tp;
-            tp.R_ground  = p[2].value;
-            tp.R_table   = p[3].value;
-            tp.L1        = p[4].value;
-            tp.L2        = p[5].value;
-            tp.alpha_min = 10.0 * kPi / 180.0;
-            tp.alpha_max = 80.0 * kPi / 180.0;
-
-            const TableKinematics tk(tp);
+            // Not transcribed here: the same function the application hands to
+            // the plate, so the mechanism the gain is designed against and the
+            // one it is checked against cannot be two different tables.
+            const TableKinematics tk(cascadeMechanism(p));
             const TablePose home = tk.home_pose(a0);
             Eigen::Matrix3d Jv = tk.velocity_jacobian({a0, a0, a0}, home);
 

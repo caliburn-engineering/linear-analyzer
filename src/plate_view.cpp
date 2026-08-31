@@ -17,9 +17,7 @@ namespace {
 constexpr double kDeg = M_PI / 180.0;
 constexpr int kBufSize = 4000;
 
-constexpr double kBallRadius = 0.02;    // [m]
-constexpr double kBallMass = 0.05;      // [kg]
-constexpr double kBallFriction = 0.01;  // rolling resistance coefficient
+constexpr double kBallRadius = kPlateBall.radius;  // [m], used when drawing
 
 namespace col {
     constexpr std::array<float,4> ground    = {0.5f, 0.5f, 0.5f, 1.0f};
@@ -56,10 +54,14 @@ OrbitCamera defaultCamera() {
     return cam;
 }
 
+// The plate's own gravity.  Fixed here and compared against the model's `g`
+// rather than followed: the dynamics object is built once, and a design solved
+// on the moon must be refused, not quietly run on Earth.
+constexpr double kGravity = 9.81;
+
 RollingBallDynamics ballDynamicsFor(const TableParams& table) {
-    BallParams ball{kBallRadius, kBallMass, kBallFriction};
-    PlateParams plate{table.R_table, 9.81};
-    return RollingBallDynamics(ball, plate);
+    PlateParams plate{table.R_table, kGravity};
+    return RollingBallDynamics(kPlateBall, plate);
 }
 
 // The scroll wheel is the one input this class cannot read by polling: GLFW
@@ -124,13 +126,29 @@ void PlateView::shutdownGL() {
     renderer_.reset();
 }
 
-void PlateView::setAllServos(float degrees) {
-    for (int i = 0; i < 3; ++i) alpha_cmd_deg_[i] = alpha_deg_[i] = degrees;
+void PlateView::commandAllServos(float degrees) {
+    for (int i = 0; i < 3; ++i) alpha_cmd_deg_[i] = degrees;
+}
+
+void PlateView::snapServos(float degrees) {
+    commandAllServos(degrees);
+    for (int i = 0; i < 3; ++i) alpha_deg_[i] = degrees;
+}
+
+std::array<double, 3> PlateView::legsRad() const {
+    return {alpha_deg_[0] * kDeg, alpha_deg_[1] * kDeg, alpha_deg_[2] * kDeg};
 }
 
 bool PlateView::designUsable() const {
     return design_offered_ && gainFitsCascade(design_) &&
-           sameMechanism(design_.mechanism, tk_.params());
+           samePlant(design_.mechanism, design_.gravity, tk_.params(), kGravity);
+}
+
+bool PlateView::loopDriving() const {
+    // The ball is part of the precondition, not a detail: with the simulation
+    // off there is nothing to balance, and the loop would hold the plate at
+    // whatever tilt the frozen ball state asks for, forever.
+    return balance_engaged_ && ball_enabled_ && designUsable();
 }
 
 void PlateView::setDesign(const AutoBalanceDesign& d, bool offered,
@@ -141,17 +159,18 @@ void PlateView::setDesign(const AutoBalanceDesign& d, bool offered,
 
     if (offered && !gainFitsCascade(d)) {
         design_reason_ = "the gain is not 3 x 7 - this is not the cascade plant";
-    } else if (offered && !sameMechanism(d.mechanism, tk_.params())) {
-        // The geometry sliders move the plant the gain is designed against;
-        // the simulated plate keeps the geometry it was built with.  Refusing
-        // is the honest answer — engaging would drive the wrong mechanism with
-        // a gain that has no idea, and nothing on screen would say so.
-        design_reason_ = "plant geometry differs from the simulated plate";
+    } else if (offered && !designUsable()) {
+        // The physical sliders move the plant the gain is designed against;
+        // the simulated plate keeps the geometry and gravity it was built
+        // with.  Refusing is the honest answer — engaging would drive one
+        // plate with a gain solved for another, and nothing on screen would
+        // say so.
+        design_reason_ = "plant geometry or gravity differs from the plate";
     }
 
     // Losing the design mid-run drops the loop rather than freezing the last
-    // command: a stale gain is not a controller.
-    if (auto_engaged_ && !designUsable()) auto_engaged_ = false;
+    // command: a stale gain is not a controller.  The one place this happens.
+    if (balance_engaged_ && !designUsable()) balance_engaged_ = false;
 }
 
 void PlateView::resetBall() {
@@ -160,10 +179,10 @@ void PlateView::resetBall() {
 }
 
 void PlateView::resetAll() {
-    setAllServos(45.0f);
+    snapServos(45.0f);
     animate_ = false;
-    auto_engaged_ = false;
-    auto_saturated_ = false;
+    balance_engaged_ = false;
+    balance_saturated_ = false;
     sp_x_mm_ = 0.0f;
     sp_y_mm_ = 0.0f;
     anim_time_ = 0.0f;
@@ -209,17 +228,16 @@ void PlateView::step(GLFWwindow* window, float dt) {
     // controller reads the legs where they ARE and the ball where it IS, and
     // the servos move afterwards — the same causal order the closed-loop test
     // runs, which is what makes that test evidence about this code.
-    const std::array<double, 3> alpha_rad = {
-        alpha_deg_[0] * kDeg, alpha_deg_[1] * kDeg, alpha_deg_[2] * kDeg};
+    const std::array<double, 3> alpha_rad = legsRad();
 
-    if (auto_engaged_ && designUsable()) {
+    if (loopDriving()) {
         const LegCommand c = legCommand(design_, alpha_rad, ball_state_,
                                         sp_x_mm_ * 1e-3, sp_y_mm_ * 1e-3);
-        auto_saturated_ = c.saturated;
+        balance_saturated_ = c.saturated;
         for (int i = 0; i < 3; ++i)
             alpha_cmd_deg_[i] = static_cast<float>(c.alpha_rad[i] / kDeg);
     } else if (animate_) {
-        auto_saturated_ = false;
+        balance_saturated_ = false;
         anim_time_ += dt * anim_speed_;
         const float amp = anim_amplitude_;
         const float w = 2.0f * static_cast<float>(M_PI) * 0.5f * anim_time_;
@@ -227,7 +245,7 @@ void PlateView::step(GLFWwindow* window, float dt) {
         alpha_cmd_deg_[1] = 45.0f + amp * std::sin(w + 2.0f * static_cast<float>(M_PI) / 3.0f);
         alpha_cmd_deg_[2] = 45.0f + amp * std::sin(w + 4.0f * static_cast<float>(M_PI) / 3.0f);
     } else {
-        auto_saturated_ = false;
+        balance_saturated_ = false;
     }
     sim_time_ += dt;
 
@@ -240,8 +258,7 @@ void PlateView::step(GLFWwindow* window, float dt) {
         alpha_deg_[i] = static_cast<float>(next[i] / kDeg);
 
     // --- Kinematics ---
-    const std::array<double, 3> alpha_now = {
-        alpha_deg_[0] * kDeg, alpha_deg_[1] * kDeg, alpha_deg_[2] * kDeg};
+    const std::array<double, 3> alpha_now = legsRad();
 
     fk_result_ = tk_.forward_kinematics(alpha_now, home_);
     if (!fk_result_.converged || fk_result_.residual_norm > 1e-6) {
@@ -322,7 +339,7 @@ void PlateView::drawControls() {
     // --- Servo Angles ---
     ImGui::SeparatorText("Servo Angles");
 
-    const bool driven = auto_engaged_ && designUsable();
+    const bool driven = loopDriving();
     if (driven) {
         // Not hidden — the sliders become the readout of what u = -Kx is
         // asking for, which is the most direct view of the loop working.
@@ -346,11 +363,11 @@ void PlateView::drawControls() {
         ImGui::SliderFloat("\xce\xb1\xe2\x82\x82 [deg]", &alpha_cmd_deg_[2], a_min, a_max, "%.1f");
     }
 
-    if (ImGui::Button("Home (45)")) setAllServos(45.0f);
+    if (ImGui::Button("Home (45)")) commandAllServos(45.0f);
     ImGui::SameLine();
-    if (ImGui::Button("Low (20)")) setAllServos(20.0f);
+    if (ImGui::Button("Low (20)")) commandAllServos(20.0f);
     ImGui::SameLine();
-    if (ImGui::Button("High (70)")) setAllServos(70.0f);
+    if (ImGui::Button("High (70)")) commandAllServos(70.0f);
     ImGui::EndDisabled();
 
     // The sliders are the COMMAND; the legs lag behind it.  Without this line
@@ -429,9 +446,7 @@ void PlateView::drawControls() {
 
     // --- Velocity Jacobian (collapsed) ---
     if (ImGui::CollapsingHeader("Velocity Jacobian")) {
-        const std::array<double, 3> ar = {
-            alpha_deg_[0] * kDeg, alpha_deg_[1] * kDeg, alpha_deg_[2] * kDeg};
-        const Eigen::Matrix3d Jv = tk_.velocity_jacobian(ar, pose_);
+        const Eigen::Matrix3d Jv = tk_.velocity_jacobian(legsRad(), pose_);
         ImGui::Text("        servo0    servo1    servo2");
         ImGui::Text("roll   %+.4f   %+.4f   %+.4f", Jv(0,0), Jv(0,1), Jv(0,2));
         ImGui::Text("pitch  %+.4f   %+.4f   %+.4f", Jv(1,0), Jv(1,1), Jv(1,2));
@@ -454,19 +469,25 @@ void PlateView::drawControls() {
 void PlateView::drawBalanceControls() {
     ImGui::SeparatorText("Balance Loop");
 
-    const bool usable = designUsable();
-    if (!usable) {
-        auto_engaged_ = false;
+    // Read-only here.  `setDesign` is the one place the loop is dropped, so a
+    // draw pass cannot disagree with it about whether the loop is running.
+    if (!designUsable()) {
         ImGui::BeginDisabled(true);
         bool off = false;
-        ImGui::Checkbox("Auto (LQR)", &off);
+        ImGui::Checkbox("Engage", &off);
         ImGui::EndDisabled();
         ImGui::TextWrapped("unavailable: %s", design_reason_.c_str());
         return;
     }
 
-    ImGui::Checkbox("Auto (LQR)", &auto_engaged_);
-    if (!auto_engaged_) {
+    ImGui::BeginDisabled(!ball_enabled_);
+    ImGui::Checkbox("Engage", &balance_engaged_);
+    ImGui::EndDisabled();
+    if (!ball_enabled_) {
+        ImGui::TextWrapped("unavailable: there is no ball to balance");
+        return;
+    }
+    if (!balance_engaged_) {
         ImGui::TextDisabled("gain ready - %d x %d, legs from %.1f deg",
                             (int)design_.K.rows(), (int)design_.K.cols(),
                             design_.home_leg_rad / kDeg);
@@ -486,7 +507,7 @@ void PlateView::drawBalanceControls() {
                                   ball_state_(1) - sp_y_mm_ * 1e-3);
     ImGui::Text("error: %6.1f mm", err * 1000.0);
 
-    if (auto_saturated_) {
+    if (balance_saturated_) {
         // Not a failure — the legs really do stop at 10 and 80 degrees.  But a
         // tuning that lives against the stops is not the tuning that was
         // designed, and the closed-loop poles on screen stop describing it.

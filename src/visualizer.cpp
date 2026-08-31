@@ -32,7 +32,7 @@
 // Assembled here rather than inside PlateView because only this side knows
 // which preset is loaded, which controller type is selected and whether the
 // Riccati solve landed.  The plate adds the two checks it alone can make — the
-// gain's shape and whether the mechanism is the one it simulates.
+// gain's shape and whether the plant described here is the one it simulates.
 //
 // The servo lag and the home leg angle are handed over whether or not a gain
 // is on offer: they are properties of the plate, and the model panel's sliders
@@ -40,31 +40,20 @@
 static void handDesignToPlate(caliburn::AppState& state,
                               const std::vector<caliburn::ModelEntry>& presets,
                               caliburn::PlateView& plate) {
-    constexpr double kDeg = 3.14159265358979323846 / 180.0;
-
     const bool is_cascade =
         state.preset_index >= 0 &&
         state.preset_index < static_cast<int>(presets.size()) &&
-        presets[state.preset_index].name.rfind("Ball-Balancer Cascade", 0) == 0;
-
-    auto param = [&state](const char* symbol, double fallback) -> double {
-        for (const auto& p : state.current_params)
-            if (p.symbol == symbol) return static_cast<double>(p.value);
-        return fallback;
-    };
+        caliburn::isCascadeModel(presets[state.preset_index]);
 
     caliburn::AutoBalanceDesign d;
     if (is_cascade) {
-        d.home_leg_rad = param("a0", 45.0) * kDeg;
-        // Same floor as the model builder applies, so the simulated servo and
-        // the modelled one cannot differ at the slider's bottom end.
-        d.servo_tau = std::max(1e-3, param("\xcf\x84", 0.05));
-        d.mechanism.R_ground  = param("Rg", 0.300);
-        d.mechanism.R_table   = param("Rt", 0.300);
-        d.mechanism.L1        = param("L1", 0.150);
-        d.mechanism.L2        = param("L2", 0.150);
-        d.mechanism.alpha_min = 10.0 * kDeg;
-        d.mechanism.alpha_max = 80.0 * kDeg;
+        // Every one of these comes from the same functions the model builder
+        // reads, so the plant the gain was designed against and the plant the
+        // plate checks against cannot be assembled two different ways.
+        d.home_leg_rad = caliburn::cascadeHomeLegAngle(state.current_params);
+        d.servo_tau = caliburn::cascadeServoTau(state.current_params);
+        d.mechanism = caliburn::cascadeMechanism(state.current_params);
+        d.gravity = caliburn::cascadeGravity(state.current_params);
         d.alpha_min_rad = d.mechanism.alpha_min;
         d.alpha_max_rad = d.mechanism.alpha_max;
     }
