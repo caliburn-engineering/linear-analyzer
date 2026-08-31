@@ -666,6 +666,22 @@ int main() {
     caliburn::matrixToTextBuf(state.plant.D, state.D_text, sizeof(state.D_text));
     caliburn::extractTFFromSS(state);
 
+    // The application opens with a controller already designed, because the
+    // demo opens with one already running: a visitor gets about ten seconds
+    // and will not go looking for a combo box to make the page do something.
+    // The default preset is the cascade, so LQR here means the plate is handed
+    // a usable gain on the second frame and attract mode closes the loop —
+    // see PlateView's `attract_running_` and issue #17.
+    //
+    // The closed-loop trace comes on with it.  Under LQR the plant is the only
+    // trace enabled by default, so the pole-zero map would open showing the
+    // OPEN-loop poles of a page whose whole claim is that the loop is closed.
+    // Written as the model panel's own rule rather than as a bare `true`: the
+    // combo applies exactly this line when a visitor changes the type, and
+    // selecting LQR here has to mean what selecting it there means.
+    state.ctrl_type = caliburn::ControllerType::LQR;
+    state.trace_visible[3] = state.ctrl_type != caliburn::ControllerType::None;
+
 #ifndef __EMSCRIPTEN__
     // Neither enum exists in ES 3.0; WebGL2 multisamples the default
     // framebuffer on its own and has no line-smoothing knob at all.

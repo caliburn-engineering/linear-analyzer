@@ -14,10 +14,8 @@
 // every time the model moves.
 #include "auto_balance.h"
 
-#include "analysis/lqr.h"
-#include "analysis/model_library.h"
 #include "ball_sim.h"
-#include "rolling_dynamics.h"
+#include "cascade_fixture.h"
 #include "table_kinematics.h"
 #include "test_helpers.h"
 
@@ -30,17 +28,8 @@ namespace {
 
 constexpr double kDeg = M_PI / 180.0;
 constexpr double kHome = 45.0 * kDeg;
-// The simulator's ball, not a copy of it: the dead-band assertion below is a
-// claim about this exact rolling resistance.
-constexpr double kBallRadius = kPlateBall.radius;
-constexpr double kBallFriction = kPlateBall.rolling_friction;
-
-const ModelEntry& cascadeModel(const std::vector<ModelEntry>& models) {
-    for (const auto& m : models)
-        if (isCascadeModel(m)) return m;
-    std::fprintf(stderr, "FAIL: no cascade model in the library\n");
-    std::exit(1);
-}
+constexpr double kBallRadius = kFixtureBallRadius;
+constexpr double kBallFriction = kFixtureBallFriction;
 
 AutoBalanceDesign designWith(const Eigen::MatrixXd& K) {
     AutoBalanceDesign d;
@@ -276,23 +265,11 @@ SimResult runClosedLoop(const ModelEntry& e,
     return r;
 }
 
-Eigen::MatrixXd gainFor(const ModelEntry& e,
-                        const Eigen::VectorXd& q,
-                        const Eigen::VectorXd& r) {
-    const LqrResult res = computeLQR(e.system,
-                                     q.asDiagonal().toDenseMatrix(),
-                                     r.asDiagonal().toDenseMatrix());
-    ASSERT_TRUE(res.success);
-    return res.K;
-}
-
-Eigen::MatrixXd defaultGain(const ModelEntry& e) {
-    return gainFor(e, defaultLqrStateWeights(7), defaultLqrInputWeights(3));
-}
-
 // 60 mm out along x and 40 mm back along y, at rest: a quarter of the plate's
 // radius, plainly visible in the 3D view and well outside anything a
-// linearisation could excuse.
+// linearisation could excuse.  Attract mode opens the application on this same
+// displacement, which is why it is the one measured here.  See
+// `AttractSchedule::start_x`.
 const Eigen::Vector4d kDisplaced(0.06, -0.04, 0.0, 0.0);
 
 // The weights the application opens on.  If THIS does not balance the ball,

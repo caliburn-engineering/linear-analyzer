@@ -223,6 +223,72 @@ The lag is integrated exactly, `alpha <- cmd + (alpha - cmd)*exp(-dt/tau)`, not
 by forward Euler: the plate runs at a fixed 60 Hz and tau defaults to 0.05 s,
 three steps per time constant, and the tau slider goes lower still.
 
+### Attract mode
+
+The application driving itself for a visitor who has not arrived yet: the
+balance loop engaged as soon as a gain exists, the ball opening 72 mm off
+centre, and a velocity kick every four seconds until somebody touches the page.
+Named after the arcade cabinet's demo reel, which solves exactly this problem.
+
+The point is **recovery**, not motion.  A motionless canvas is
+indistinguishable from a broken build, and a still balanced ball reads as a
+photograph of one — but a ball that is knocked off centre and comes back is a
+control system, and nothing else looks like that.  A visitor gives the page
+about ten seconds and will not go looking for a play button.
+
+Three decisions carry it:
+
+- **The opening is a displacement, the disturbances are velocity kicks.**  At
+  `t = 0` there is nothing on screen yet for a kick to be a change *from*, so
+  the ball simply starts off centre and is already moving on the first frame
+  that draws.  Afterwards a position teleport would read as a glitch in the
+  render; an impulse reads as something having hit the ball.
+- **The schedule is a pure function of elapsed time**, with no random number
+  anywhere.  Every acceptance criterion is a claim about what a visitor sees,
+  and a schedule that differed run to run could only be checked by watching it.
+  Written this way, `tests/test_attract_mode.cpp` runs the whole minute against
+  the nonlinear plate: the kick throws the ball 43-85 mm out, the loop has it
+  back inside 10 mm before the next one, and it never leaves the plate — worst
+  excursion in a minute is 85 mm against the 280 mm the plate has.
+- **The clock is the simulation's, not the wall's.**  The plate advances by a
+  fixed 1/60 per frame, so a device that cannot hold 60 fps plays the whole
+  demo slow.  Pacing the kicks by a wall clock would then drop the next one
+  onto a recovery still in progress — losing exactly the reading the mode
+  exists to produce.  A slow device gets the demo late rather than incoherent,
+  and the first kick is pulled in to 2.5 s so that "late" still lands inside
+  the ten seconds a stranger gives the page.  Kicks are counted rather than
+  triggered on an interval, which is what makes one undeliverable twice.
+
+`setDesign` is where the loop first closes, and it has to be: on the opening
+frame the LQR solve has not run, so a `balance_engaged_` set true in the
+constructor would be cleared by the stale-gain drop and never set again.
+Engaging on the first *usable* design is what "already stabilising at load"
+actually amounts to.
+
+The application also now opens with `ControllerType::LQR` selected and the
+closed-loop trace visible, since a page whose whole claim is that the loop is
+closed should not open its pole-zero map on the open-loop poles.
+
+Attract mode stands down at the first click, scroll or key, and **never
+resumes**.  A ball being kicked by nobody while the visitor is driving the
+plate themselves is a puzzle, not a demonstration.  One-way on purpose: an idle
+visitor is still a visitor, and a demo that started kicking again behind their
+back would be worse than one that stopped.  The loop it engaged stays engaged —
+standing down means giving up the disturbances, not the controller.
+
+Decided in [#17](https://github.com/caliburn-engineering/caliburn/issues/17).
+
+> **Not "demo mode", "idle mode" or "screensaver".**
+> All three name a state the application is *stuck in* until something releases
+> it, and two of them imply a substitute for the real thing — a canned loop
+> playing where the product would be.  Nothing here is canned: the plate, the
+> gain and the rolling ball are the same ones the visitor gets, and the only
+> difference is who is providing the disturbances.  "Attract" also says what
+> the mode is *for*, which is the test any addition to it has to pass.
+>
+> Prose may still call the running page "the demo" — that is the artefact, not
+> the mode.
+
 ### Rolling-friction dead band
 
 `RollingBallDynamics` opposes motion with `c_rr * g * sign(v)`, so a plate

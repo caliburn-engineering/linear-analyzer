@@ -129,6 +129,7 @@ target_include_directories(kinematics PUBLIC src)
 target_link_libraries(kinematics PUBLIC Eigen3::Eigen)
 
 add_library(ball_dynamics STATIC
+    src/attract_mode.cpp
     src/auto_balance.cpp
     src/ball_sim.cpp
     src/ball_plant_linear.cpp
@@ -206,6 +207,11 @@ if(NOT EMSCRIPTEN)
     target_link_libraries(test_auto_balance PRIVATE ball_dynamics)
     target_include_directories(test_auto_balance PRIVATE tests)
     add_test(NAME test_auto_balance COMMAND test_auto_balance)
+
+    add_executable(test_attract_mode tests/test_attract_mode.cpp)
+    target_link_libraries(test_attract_mode PRIVATE ball_dynamics)
+    target_include_directories(test_attract_mode PRIVATE tests)
+    add_test(NAME test_attract_mode COMMAND test_attract_mode)
 endif()
 
 # --- Visualizer executable ---

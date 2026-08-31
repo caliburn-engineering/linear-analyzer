@@ -1,6 +1,7 @@
 // src/plate_view.h
 #pragma once
 
+#include "attract_mode.h"
 #include "auto_balance.h"
 #include "ball_sim.h"
 #include "comparison_panel.h"
@@ -70,6 +71,10 @@ public:
     /// `d.servo_tau` is honoured whether or not the design is offered: the
     /// legs have first-order lag in manual driving too, and the model panel's
     /// tau slider is the one place that number lives.
+    ///
+    /// This is also where attract mode closes the loop for the first time —
+    /// see `attract_running_`.  Engaging and dropping are the same decision
+    /// read in two directions, and they belong at the same seam.
     void setDesign(const AutoBalanceDesign& d, bool offered,
                    const std::string& reason);
 
@@ -101,6 +106,10 @@ private:
     /// The single authority: `step` acts on it and `drawControls` greys the
     /// manual controls on it, so the two cannot disagree about who is driving.
     bool loopDriving() const;
+
+    /// Deliver whatever disturbances the attract schedule owes, and stand down
+    /// the moment a visitor touches anything.  No-op once they have.
+    void stepAttract();
 
     TableKinematics tk_;
     RollingBallDynamics ball_dynamics_;
@@ -152,6 +161,25 @@ private:
     double condition_num_ = 0.0;
     double manipulability_ = 0.0;
     float sim_time_ = 0.0f;
+
+    // --- Attract mode ---
+    // The demo running itself until somebody turns up: the loop engaged as
+    // soon as a gain exists, the ball opening off centre, and a kick every few
+    // seconds.  Without it the page opens on a balanced ball sitting still,
+    // which is indistinguishable from a broken build.  See issue #17.
+    //
+    // One-way.  An idle visitor is still a visitor, and a demo that started
+    // kicking the ball again behind their back would be worse than one that
+    // stopped.
+    //
+    // The other half of the opening state is not here and cannot be: selecting
+    // LQR is a fact about the model panel's controller type, which this class
+    // deliberately cannot see — `handDesignToPlate` exists for exactly that
+    // reason.  It is set beside the rest of the app's opening state, in
+    // `visualizer.cpp`'s main().
+    AttractSchedule attract_{};
+    bool attract_running_ = true;
+    int attract_kicks_done_ = 0;
 
     // --- Ball ---
     Eigen::Vector4d ball_state_ = Eigen::Vector4d::Zero();
