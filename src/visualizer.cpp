@@ -162,6 +162,13 @@ static void render_frame(void* arg) {
             state.ref_r = 0;
         }
 
+        // LQR weights follow the STATE count, which the (p, m) guard above
+        // does not track — a plant can keep its shape and change order.
+        if (state.lqr_q.size() != state.plant.states())
+            state.lqr_q = Eigen::VectorXd::Ones(state.plant.states());
+        if (state.lqr_r.size() != state.plant.inputs())
+            state.lqr_r = Eigen::VectorXd::Ones(state.plant.inputs());
+
         state.systems[0] = state.plant;
         state.system_valid[0] = true;
 
@@ -207,6 +214,25 @@ static void render_frame(void* arg) {
                 }
             } else {
                 state.system_valid[2] = false;
+                state.system_valid[3] = false;
+            }
+        } else if (state.ctrl_type == caliburn::ControllerType::LQR) {
+            // Solved every recompute, so the gain tracks the weight sliders
+            // and the physical-parameter sliders without a Design button.
+            // The plant is re-linearised upstream of here, so a change to the
+            // leg geometry moves K as well as the poles.
+            state.lqr_result = caliburn::computeLQR(
+                state.plant,
+                state.lqr_q.asDiagonal().toDenseMatrix(),
+                state.lqr_r.asDiagonal().toDenseMatrix());
+            state.system_valid[1] = false;
+            state.system_valid[2] = false;
+            if (state.lqr_result.success) {
+                state.ctrl_K = state.lqr_result.K;
+                state.systems[3] =
+                    caliburn::stateFeedbackClose(state.plant, state.ctrl_K);
+                state.system_valid[3] = true;
+            } else {
                 state.system_valid[3] = false;
             }
         } else if (state.ctrl_type == caliburn::ControllerType::GainMatrix &&
@@ -395,7 +421,8 @@ static void render_frame(void* arg) {
                 }
                 break;
             case caliburn::PZMode::StateFB:
-                if (state.ctrl_type == caliburn::ControllerType::GainMatrix &&
+                if ((state.ctrl_type == caliburn::ControllerType::GainMatrix ||
+                     state.ctrl_type == caliburn::ControllerType::LQR) &&
                     state.ctrl_K.size() > 0) {
                     state.root_locus = caliburn::computeStateFeedbackLocus(
                         state.plant, state.ctrl_K,
@@ -580,8 +607,9 @@ int main() {
     // --- Init app state ---
     caliburn::AppState state;
     auto presets = caliburn::getBuiltinModels();
-    state.plant = presets[0].system;
-    state.current_params = presets[0].params;
+    state.preset_index = caliburn::defaultModelIndex(presets);
+    state.plant = presets[state.preset_index].system;
+    state.current_params = presets[state.preset_index].params;
     caliburn::matrixToTextBuf(state.plant.A, state.A_text, sizeof(state.A_text));
     caliburn::matrixToTextBuf(state.plant.B, state.B_text, sizeof(state.B_text));
     caliburn::matrixToTextBuf(state.plant.C, state.C_text, sizeof(state.C_text));

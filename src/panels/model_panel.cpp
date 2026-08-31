@@ -404,6 +404,123 @@ static void drawPairingGrid(AppState& state) {
     }
 }
 
+// The LQR design surface: state weights, input weights, the resulting gain,
+// and where it put the closed-loop poles.  No Design button — the gain is
+// re-solved on every recompute, so dragging a weight moves K and the poles
+// together, which is the point of designing this way rather than by hand.
+//
+// LQR needs the full state vector.  The simulator has it; a physical plate
+// would need an observer.  That is a documented limitation, not a defect.
+static void drawLqrDesigner(AppState& state) {
+    const int n = state.plant.states();
+    const int m = state.plant.inputs();
+    if (state.lqr_q.size() != n || state.lqr_r.size() != m) {
+        ImGui::TextDisabled("Sizing weights to the plant...");
+        state.needs_recompute = true;
+        return;
+    }
+
+    // State names, where the plant is one we know the physical reading of.
+    // Anonymous x0..xn-1 otherwise: inventing labels for an arbitrary plant
+    // would be worse than admitting we do not know them.
+    static const char* kCascadeStates[7] = {
+        "\xce\xb4\xce\xb1\xe2\x82\x81 leg 1", "\xce\xb4\xce\xb1\xe2\x82\x82 leg 2",
+        "\xce\xb4\xce\xb1\xe2\x82\x83 leg 3", "x  ball", "y  ball",
+        "x' ball", "y' ball"};
+    const bool named = (n == 7 && m == 3);
+
+    ImGui::TextDisabled("Q - how much each state deviation costs");
+    bool changed = false;
+    char label[64];
+    for (int i = 0; i < n; ++i) {
+        double v = state.lqr_q(i);
+        float f = static_cast<float>(v);
+        if (named) std::snprintf(label, sizeof(label), "%s##q%d", kCascadeStates[i], i);
+        else       std::snprintf(label, sizeof(label), "x%d##q%d", i, i);
+        if (ImGui::SliderFloat(label, &f, 0.01f, 1000.0f, "%.2f",
+                               ImGuiSliderFlags_Logarithmic)) {
+            state.lqr_q(i) = f;
+            changed = true;
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("R - how expensive each input is");
+    for (int j = 0; j < m; ++j) {
+        float f = static_cast<float>(state.lqr_r(j));
+        if (named) std::snprintf(label, sizeof(label), "leg %d cmd##r%d", j + 1, j);
+        else       std::snprintf(label, sizeof(label), "u%d##r%d", j, j);
+        if (ImGui::SliderFloat(label, &f, 0.001f, 1000.0f, "%.3f",
+                               ImGuiSliderFlags_Logarithmic)) {
+            state.lqr_r(j) = f;
+            changed = true;
+        }
+    }
+    if (changed) state.needs_recompute = true;
+
+    ImGui::Spacing();
+    if (ImGui::Button("Reset weights")) {
+        state.lqr_q = Eigen::VectorXd::Ones(n);
+        state.lqr_r = Eigen::VectorXd::Ones(m);
+        state.needs_recompute = true;
+    }
+
+    // --- Result ---
+    ImGui::SeparatorText("Gain");
+    if (!state.lqr_result.success) {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "LQR failed");
+        ImGui::TextWrapped("%s", state.lqr_result.error.c_str());
+        return;
+    }
+
+    ImGui::Text("K (%d x %d), u = -Kx",
+                (int)state.lqr_result.K.rows(), (int)state.lqr_result.K.cols());
+    if (ImGui::BeginTable("lqr_K", (int)state.lqr_result.K.cols() + 1,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("row");
+        for (int j = 0; j < state.lqr_result.K.cols(); ++j) {
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("x%d", j);
+        }
+        for (int i = 0; i < state.lqr_result.K.rows(); ++i) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("u%d", i);
+            for (int j = 0; j < state.lqr_result.K.cols(); ++j) {
+                ImGui::TableNextColumn();
+                ImGui::Text("%+.3f", state.lqr_result.K(i, j));
+            }
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText("Closed-loop poles");
+    double slowest = 0.0;
+    bool stable = true;
+    for (const auto& pole : state.lqr_result.closed_loop_poles) {
+        if (pole.real() >= 0.0) stable = false;
+        if (slowest == 0.0 || pole.real() > slowest) slowest = pole.real();
+    }
+    for (const auto& pole : state.lqr_result.closed_loop_poles) {
+        if (std::abs(pole.imag()) < 1e-9)
+            ImGui::Text("  %+.3f", pole.real());
+        else
+            ImGui::Text("  %+.3f %s %.3fj", pole.real(),
+                        pole.imag() < 0 ? "-" : "+", std::abs(pole.imag()));
+    }
+    if (stable) {
+        // The slowest pole sets how long the ball takes to settle, which is
+        // the number the 3D view makes visible.
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+                           "Stable - slowest pole %.3f (settles ~%.1f s)",
+                           slowest, 4.0 / std::abs(slowest));
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                           "Closed loop is NOT stable");
+    }
+}
+
 void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
     ImGui::Begin("Model Configuration");
 
@@ -592,10 +709,15 @@ void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
 
     // --- Controller section ---
     ImGui::SeparatorText("Controller");
+    // Index-coupled to ControllerType.  IM_ARRAYSIZE rather than a literal:
+    // the previous hardcoded 5 would have hidden any member added here.
     const char* ctrl_types[] = {"None", "PID", "Lead/Lag",
-                                "State-Space", "Gain Matrix K"};
+                                "State-Space", "Gain Matrix K", "LQR"};
+    static_assert(IM_ARRAYSIZE(ctrl_types) ==
+                      static_cast<int>(ControllerType::LQR) + 1,
+                  "ctrl_types is index-coupled to ControllerType");
     int ctrl_idx = static_cast<int>(state.ctrl_type);
-    if (ImGui::Combo("Type", &ctrl_idx, ctrl_types, 5)) {
+    if (ImGui::Combo("Type", &ctrl_idx, ctrl_types, IM_ARRAYSIZE(ctrl_types))) {
         state.ctrl_type = static_cast<ControllerType>(ctrl_idx);
         state.needs_recompute = true;
         const bool lb = state.ctrl_type == ControllerType::PID ||
@@ -666,6 +788,8 @@ void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
             if (drawMatrixSliders("K", state.ctrl_K, state.K_text, sizeof(state.K_text)))
                 state.needs_recompute = true;
         }
+    } else if (state.ctrl_type == ControllerType::LQR) {
+        drawLqrDesigner(state);
     }
 
     // --- Channel selector ---
@@ -709,8 +833,9 @@ void drawModelPanel(AppState& state, const std::vector<ModelEntry>& presets) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
     if (ImGui::Button("Reset All", ImVec2(-1, 0))) {
         state = AppState{};
-        state.plant = presets[0].system;
-        state.current_params = presets[0].params;
+        state.preset_index = defaultModelIndex(presets);
+        state.plant = presets[state.preset_index].system;
+        state.current_params = presets[state.preset_index].params;
         matrixToTextBuf(state.plant.A, state.A_text, sizeof(state.A_text));
         matrixToTextBuf(state.plant.B, state.B_text, sizeof(state.B_text));
         matrixToTextBuf(state.plant.C, state.C_text, sizeof(state.C_text));

@@ -61,6 +61,10 @@ void draw_time_series_panel(
     // --- Plot visibility toggles ---
     for (int pi = 0; pi < (int)plots.size(); ++pi) {
         if (pi > 0) ImGui::SameLine();
+        // The toggle carries the plot's title, and so does its ImPlot::BeginPlot
+        // below — same label, same window, same ID.  ImGui flags that as a
+        // conflict and the two items fight over hover and activation state.
+        ImGui::PushID(pi);
         bool active = plots[pi].visible;
         if (!active) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 1.0f));
@@ -72,6 +76,7 @@ void draw_time_series_panel(
         if (!active) {
             ImGui::PopStyleColor(2);
         }
+        ImGui::PopID();
     }
     ImGui::Separator();
 

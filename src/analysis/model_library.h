@@ -39,6 +39,11 @@ struct ModelEntry {
 // Built-in preset models.
 std::vector<ModelEntry> getBuiltinModels();
 
+// The preset the application opens on.  Resolved by name, not by position:
+// this is a ball-balancer product, and a plain index would silently select a
+// different plant the next time the library gains an entry.  Falls back to 0.
+int defaultModelIndex(const std::vector<ModelEntry>& models);
+
 // Parse a matrix from a MATLAB-style string: "0 1; -2 -3"
 // Rows separated by ';', columns by whitespace.
 // Returns nullopt on parse failure.

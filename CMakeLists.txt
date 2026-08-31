@@ -115,20 +115,23 @@ target_include_directories(analysis_lib PUBLIC
     ${CALIBURN_REFERENCE}/models       # linear_system.h, linearizer.h
     ${CALIBURN_REFERENCE}/integrators  # rk4.h
 )
-target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen)
+target_link_libraries(analysis_lib PUBLIC Eigen3::Eigen kinematics)
 
 # --- Plate libraries (desktop only) ---
 # The Emscripten build is untouched by the ball-balancer merge (issue #13); the
 # web port is issue #15.  Everything the plate view needs is fenced off here so
 # the published WASM demo keeps building exactly what it built before.
-if(NOT EMSCRIPTEN)
-    add_library(kinematics STATIC
-        src/table_kinematics.cpp
-        src/trajectory_validator.cpp
-    )
-    target_include_directories(kinematics PUBLIC src)
-    target_link_libraries(kinematics PUBLIC Eigen3::Eigen)
+# The 3-RRS kinematics are portable (Eigen and the standard library only) and
+# the cascade plant in the model library is built from them, so they are not
+# fenced to desktop even though the 3D view is.
+add_library(kinematics STATIC
+    src/table_kinematics.cpp
+    src/trajectory_validator.cpp
+)
+target_include_directories(kinematics PUBLIC src)
+target_link_libraries(kinematics PUBLIC Eigen3::Eigen)
 
+if(NOT EMSCRIPTEN)
     add_library(ball_dynamics STATIC
         src/ball_sim.cpp
         src/ball_plant_linear.cpp
@@ -192,6 +195,11 @@ if(NOT EMSCRIPTEN)
     target_link_libraries(test_lqr PRIVATE analysis_lib)
     target_include_directories(test_lqr PRIVATE tests)
     add_test(NAME test_lqr COMMAND test_lqr)
+
+    add_executable(test_cascade_model tests/test_cascade_model.cpp)
+    target_link_libraries(test_cascade_model PRIVATE analysis_lib)
+    target_include_directories(test_cascade_model PRIVATE tests)
+    add_test(NAME test_cascade_model COMMAND test_cascade_model)
 
     add_executable(test_ball_sim tests/test_ball_sim.cpp)
     target_link_libraries(test_ball_sim PRIVATE ball_dynamics)
