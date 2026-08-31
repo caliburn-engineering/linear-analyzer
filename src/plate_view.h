@@ -2,11 +2,13 @@
 #pragma once
 
 #include "attract_mode.h"
+#include "ball_contact.h"
 #include "auto_balance.h"
 #include "ball_sim.h"
 #include "comparison_panel.h"
 #include "plot_panel.h"
 #include "renderer.h"
+#include "setpoint_path.h"
 #include "table_kinematics.h"
 
 #include <Eigen/Core>
@@ -139,6 +141,15 @@ private:
     float sp_x_mm_ = 0.0f;  // ball setpoint, plate frame
     float sp_y_mm_ = 0.0f;
 
+    // --- Trajectory tracking (#24) ---
+    // A moving setpoint.  It writes `sp_x_mm_` / `sp_y_mm_` rather than going
+    // round them, so the control law is untouched and the sliders keep working
+    // as the readout of where the ball is being sent — the same arrangement
+    // the servo sliders have under the balance loop.
+    SetpointPath path_{};
+    float path_radius_mm_ = 120.0f;
+    float path_period_s_ = 10.0f;
+
     // --- Camera ---
     OrbitCamera camera_;
     bool dragging_ = false;
@@ -183,7 +194,14 @@ private:
     int attract_kicks_done_ = 0;
 
     // --- Ball ---
-    Eigen::Vector4d ball_state_ = Eigen::Vector4d::Zero();
+    // Six states now, in two phases: the plate can lose contact and the ball
+    // can fly.  Measured, the shipped tuning does it in 30 of 72 kick
+    // directions — briefly, but really.  See issue #23 and `ball_contact.h`.
+    BallState ball_{};
+    PlateMotion plate_motion_{};   ///< this frame's, for the contact test
+    PlateMotion plate_motion_prev_{};
+    bool ball_was_airborne_ = false;
+    float airborne_flash_s_ = 0.0f;  ///< keeps a brief hop legible in the panel
     bool ball_enabled_ = true;
     bool ball_on_plate_ = true;
     bool ball_auto_reset_ = true;
@@ -194,7 +212,8 @@ private:
     TimeSeries s_phi_, s_theta_;
     TimeSeries s_a0_, s_a1_, s_a2_;
     TimeSeries s_cond_, s_zc_;
-    TimeSeries s_bx_, s_by_;
+    TimeSeries s_bx_, s_by_, s_bz_;
+    TimeSeries s_err_;
     std::vector<PlotConfig> plots_;
 
     ComparisonPanel comparison_panel_;

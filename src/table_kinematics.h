@@ -71,6 +71,14 @@ public:
     /// Table rotation matrix from local to world: Ry(theta) * Rx(phi)
     Eigen::Matrix3d table_rotation(double phi, double theta) const;
 
+    /// The orientation's time derivative, given the pose and its rates.
+    ///
+    /// Public because the contact model needs it: whether a ball stays on the
+    /// plate is a question about how the surface MOVES, and a rotation matrix
+    /// alone cannot answer it.
+    Eigen::Matrix3d table_rotation_dot(double phi, double theta,
+                                       double phi_dot, double theta_dot) const;
+
     /// Table attachment point in world frame
     Eigen::Vector3d table_point_world(int i, const TablePose& pose) const;
 

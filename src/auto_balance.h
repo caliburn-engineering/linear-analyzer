@@ -141,6 +141,25 @@ Retreat retreatToWorkspace(const TableKinematics& tk,
                            const std::array<double, 3>& target,
                            const std::array<double, 3>& safe);
 
+/// Where the ball will be when it comes back down, in the plate's frame.
+///
+/// A ball in the air is one the plate cannot touch, so `u = -Kx` on where it
+/// IS regulates a quantity nothing can move.  Where it will LAND is a
+/// different matter: the plate has the whole flight to get underneath it, and
+/// the vertical state is exactly what says how long that is.
+///
+/// Solves `z + vz t - g t^2 / 2 = r` for the positive root and carries the
+/// horizontal motion forward.  Returns the present position unchanged for a
+/// ball that is not going to land — one already at or below the surface, or
+/// thrown so hard the quadratic has no root — because a prediction nobody can
+/// act on is worse than none.
+///
+/// Approximate on purpose: it ignores the plate's own motion during the
+/// flight, which is real but which the plate is about to choose.  See #23.
+Eigen::Vector2d predictedLanding(const Eigen::Matrix<double, 6, 1>& ball_plate,
+                                 double ball_radius,
+                                 double gravity);
+
 /// Advance the three first-order servos one step, integrated exactly:
 ///
 ///     alpha <- cmd + (alpha - cmd) * exp(-dt / tau)

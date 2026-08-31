@@ -242,6 +242,12 @@ Eigen::Vector3d TableKinematics::fk_residual(const std::array<double, 3>& alpha,
     return f;
 }
 
+Eigen::Matrix3d TableKinematics::table_rotation_dot(double phi, double theta,
+                                                    double phi_dot,
+                                                    double theta_dot) const {
+    return dR_dphi(phi, theta) * phi_dot + dR_dtheta(phi, theta) * theta_dot;
+}
+
 Eigen::Matrix3d TableKinematics::dR_dphi(double phi, double theta) const {
     double cp = std::cos(phi),   sp = std::sin(phi);
     double ct = std::cos(theta), st = std::sin(theta);

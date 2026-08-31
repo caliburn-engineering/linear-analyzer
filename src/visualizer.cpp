@@ -89,14 +89,27 @@ static void buildDefaultLayout(ImGuiID dock_id, const ImVec2& size) {
                                        ImGuiDockNodeFlags_PassthruCentralNode);
     ImGui::DockBuilderSetNodeSize(dock_id, size);
 
+    // Ratios read off a layout arrived at by using the thing, rather than
+    // guessed: 0.22 / 0.46 / 0.34 were already what a session settled on, and
+    // the two that were not are corrected here.
+    //
     // The central node is deliberately left empty: it is where the 3D plate
     // shows through the passthru dockspace.
     ImGuiID centre = dock_id;
     ImGuiID left   = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left,  0.22f, nullptr, &centre);
     ImGuiID right  = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.46f, nullptr, &centre);
     ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down,  0.34f, nullptr, &centre);
+    // System Properties is a readout, not a workspace: it needs the height of
+    // its own text and no more.  At 0.34 it took a third of the left column
+    // away from the panel that actually gets used.
     ImGuiID left_bottom =
-        ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.34f, nullptr, &left);
+        ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.125f, nullptr, &left);
+    // Plate Plots and Model Comparison side by side rather than tabbed.  They
+    // are meant to be read against each other — the whole point of the
+    // comparison panel is the divergence between the linear prediction and the
+    // nonlinear ball — and a tab makes that a memory test.
+    ImGuiID bottom_right =
+        ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.5f, nullptr, &bottom);
 
     ImGui::DockBuilderDockWindow("Model Configuration", left);
     ImGui::DockBuilderDockWindow("Plate Control", left);
@@ -108,7 +121,7 @@ static void buildDefaultLayout(ImGuiID dock_id, const ImVec2& size) {
     ImGui::DockBuilderDockWindow("Time Response", right);
 
     ImGui::DockBuilderDockWindow("Plate Plots", bottom);
-    ImGui::DockBuilderDockWindow("Model Comparison", bottom);
+    ImGui::DockBuilderDockWindow("Model Comparison", bottom_right);
 
     ImGui::DockBuilderFinish(dock_id);
 }

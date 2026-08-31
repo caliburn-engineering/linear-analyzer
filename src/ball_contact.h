@@ -1,0 +1,158 @@
+// src/ball_contact.h
+#pragma once
+
+#include "ball_sim.h"
+#include "table_kinematics.h"
+
+#include <Eigen/Core>
+#include <array>
+
+namespace caliburn {
+
+/// The plate's rigid-body motion in the world frame at one instant.
+///
+/// `RollingBallDynamics` needs none of this: it models a ball glued to a
+/// surface, and a glued ball does not care how the surface moves.  A ball that
+/// can come OFF needs all of it, because whether it stays is a question about
+/// the surface's acceleration, not its tilt.
+///
+/// Everything here is analytic.  Nothing is differenced — the servo lag has a
+/// closed-form derivative and the velocity Jacobian carries it through to the
+/// pose, so the only finite difference in the whole contact calculation is the
+/// single one in `normalAccel`, and it differences THESE rather than positions.
+struct PlateMotion {
+    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();  ///< plate orientation
+    Eigen::Vector3d c = Eigen::Vector3d::Zero();      ///< table centre, world
+    Eigen::Vector3d c_dot = Eigen::Vector3d::Zero();
+    Eigen::Vector3d omega = Eigen::Vector3d::Zero();  ///< angular velocity
+
+    /// Whether `c_dot` and `omega` are worth believing.
+    ///
+    /// They come through the velocity Jacobian, which is `-J_pose^-1 J_alpha`,
+    /// and near a kinematic singularity that inverse amplifies without bound:
+    /// measured, an over-aggressive gain drives the plate to a condition
+    /// number of 2464 and the rates that come back would launch the ball a
+    /// metre into the air off a 0.26 m/s nudge.  The hop is arithmetic, not
+    /// physics.
+    ///
+    /// So the rates carry their own credibility, and the contact test declines
+    /// to act on rates that do not have it.  The threshold is the one the
+    /// application already shows the user — condition number 20, the line
+    /// where its own Jacobian readout turns red and says "Poor".
+    bool rates_trustworthy = true;
+
+    /// The plate's outward normal in world coordinates.
+    Eigen::Vector3d normal() const { return R.col(2); }
+};
+
+/// The Jacobian condition number above which `plateMotion` stops vouching for
+/// its own rates.  The application's existing "Poor" line, reused rather than
+/// invented: a second threshold for the same thing would be a second opinion
+/// about when this mechanism is in trouble.
+inline constexpr double kRatesUntrustworthyAbove = 20.0;
+
+/// Assemble the plate's motion from where the legs are and how fast they move.
+///
+/// `alpha_dot` is exact rather than differenced: the servos are a first-order
+/// lag, so `alpha_dot = (cmd - alpha) / tau` is the model's own derivative.
+PlateMotion plateMotion(const TableKinematics& tk,
+                        const TablePose& pose,
+                        const std::array<double, 3>& alpha_rad,
+                        const std::array<double, 3>& alpha_dot_rad_s);
+
+/// The normal force per unit mass holding the ball on the plate, `N / m`.
+///
+/// A ball is held on a surface by whatever normal force is needed to make its
+/// centre follow the surface.  Write the centre's world position as
+/// `P = c + R s`, with `s = (x, y, r)` the centre in the plate's own frame,
+/// and take the component of Newton's second law along the plate normal:
+///
+///     N/m = g (n . z) + n . c_ddot
+///           + n . [omega_dot x (R s) + omega x (omega x (R s))]
+///           + 2 n . (omega x R s_dot)
+///
+/// The first two terms are the ones intuition supplies — gravity's share along
+/// the normal, and the plate being driven up or down under the ball.  The
+/// third is the plate's rotation swinging the contact point vertically, and
+/// the fourth is Coriolis: a ball rolling on a tilting plate is held by a
+/// different force than a ball sitting still on it.
+///
+/// **`N/m <= 0` is separation.**  The surface can push a ball, never pull it,
+/// so a negative answer means the plate is accelerating away faster than
+/// gravity can carry the ball after it, and contact is over.
+///
+/// `prev` and `dt` supply `omega_dot` and `c_ddot` by one finite difference.
+/// That difference is of analytic rates rather than of sampled positions,
+/// which is the difference between a usable number and noise: differencing
+/// `z_c` twice across three frames at 60 Hz gives an answer that swings by
+/// tens of m/s^2 on rounding alone.
+double normalAccel(const PlateMotion& now,
+                   const PlateMotion& prev,
+                   double dt,
+                   const Eigen::Vector3d& s,
+                   const Eigen::Vector2d& s_dot,
+                   double gravity);
+
+/// Where the ball is, and whether the plate is still touching it.
+///
+/// Two phases, two frames, and the frame is not an implementation detail.
+/// While the ball rolls, its natural coordinates are the plate's — that is the
+/// frame `RollingBallDynamics` integrates in and the frame the cascade plant's
+/// state vector is written in, and neither should have to change because the
+/// ball can now leave.  While it is airborne the only force on it is gravity,
+/// which is a statement about the WORLD frame; re-expressing that in a frame
+/// which is itself tilting and heaving would be a change of variables with
+/// nothing whatever to recommend it.
+///
+/// So each phase keeps its own truth and `plateFrame` converts on demand, for
+/// the things that want one answer regardless — the plots, the readout, and
+/// the test of whether the ball is still over the plate.
+struct BallState {
+    bool airborne = false;
+
+    /// [x, y, vx, vy] in the plate frame.  The truth while rolling.
+    Eigen::Vector4d rolling = Eigen::Vector4d::Zero();
+
+    /// Ball centre and velocity in the world.  The truth while airborne.
+    Eigen::Vector3d flight_p = Eigen::Vector3d::Zero();
+    Eigen::Vector3d flight_v = Eigen::Vector3d::Zero();
+};
+
+/// The ball's centre and velocity in the plate frame, in either phase:
+/// `[x, y, z, vx, vy, vz]`.  While rolling, `z` is the ball's radius and `vz`
+/// is zero — that is what rolling means.
+Eigen::Matrix<double, 6, 1> plateFrame(const BallState& b,
+                                       const PlateMotion& plate,
+                                       double ball_radius);
+
+/// The ball's centre and velocity in the world, in either phase.  This is what
+/// a launch is made of: a ball leaving a moving plate carries the plate's
+/// velocity at the contact point, not just its own rolling velocity.
+void worldOf(const BallState& b, const PlateMotion& plate, double ball_radius,
+             Eigen::Vector3d* p, Eigen::Vector3d* v);
+
+/// Advance the ball one frame, changing phase when contact is lost or made.
+///
+/// Rolling while the plate can still push (`N/m > 0`), ballistic when it
+/// cannot — and rolling regardless while `now.rates_trustworthy` is false,
+/// because a separation is a claim about the plate's velocity and this is the
+/// case where nobody knows what that is.  The launch takes the ball's full world velocity — including the
+/// plate's motion at the contact point, which is most of it when the legs are
+/// slamming — and the landing is inelastic: the normal component of the
+/// approach is absorbed and the tangential part carries on rolling.
+///
+/// Inelastic rather than bouncing, deliberately.  A real ball does bounce, but
+/// a restitution coefficient is a number nobody here has measured, and the
+/// visible behaviour this ticket is about — the ball leaving the plate at all —
+/// does not depend on it.  A bounce would be a second guess stacked on the
+/// first.
+BallState stepBallContact(const RollingBallDynamics& dynamics,
+                          const BallState& b,
+                          const PlateMotion& now,
+                          const PlateMotion& prev,
+                          const TablePose& pose,
+                          double ball_radius,
+                          double gravity,
+                          double dt);
+
+}  // namespace caliburn

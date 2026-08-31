@@ -130,6 +130,8 @@ target_link_libraries(kinematics PUBLIC Eigen3::Eigen)
 
 add_library(ball_dynamics STATIC
     src/attract_mode.cpp
+    src/ball_contact.cpp
+    src/setpoint_path.cpp
     src/auto_balance.cpp
     src/ball_sim.cpp
     src/ball_plant_linear.cpp
@@ -207,6 +209,21 @@ if(NOT EMSCRIPTEN)
     target_link_libraries(test_auto_balance PRIVATE ball_dynamics)
     target_include_directories(test_auto_balance PRIVATE tests)
     add_test(NAME test_auto_balance COMMAND test_auto_balance)
+
+    add_executable(test_trajectory tests/test_trajectory.cpp)
+    target_link_libraries(test_trajectory PRIVATE ball_dynamics)
+    target_include_directories(test_trajectory PRIVATE tests)
+    add_test(NAME test_trajectory COMMAND test_trajectory)
+
+    add_executable(test_setpoint_path tests/test_setpoint_path.cpp)
+    target_link_libraries(test_setpoint_path PRIVATE ball_dynamics)
+    target_include_directories(test_setpoint_path PRIVATE tests)
+    add_test(NAME test_setpoint_path COMMAND test_setpoint_path)
+
+    add_executable(test_ball_contact tests/test_ball_contact.cpp)
+    target_link_libraries(test_ball_contact PRIVATE ball_dynamics)
+    target_include_directories(test_ball_contact PRIVATE tests)
+    add_test(NAME test_ball_contact COMMAND test_ball_contact)
 
     add_executable(test_assembly_mode tests/test_assembly_mode.cpp)
     target_link_libraries(test_assembly_mode PRIVATE ball_dynamics)

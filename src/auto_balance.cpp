@@ -127,6 +127,21 @@ std::array<double, 3> stepServos(const std::array<double, 3>& alpha_rad,
     return next;
 }
 
+Eigen::Vector2d predictedLanding(const Eigen::Matrix<double, 6, 1>& b,
+                                 double ball_radius,
+                                 double gravity) {
+    const Eigen::Vector2d here(b(0), b(1));
+    const double dz = b(2) - ball_radius;   // height above the surface
+    if (dz <= 0.0 || gravity <= 0.0) return here;
+
+    // z(t) = dz + vz t - g t^2 / 2 = 0, positive root.
+    const double vz = b(5);
+    const double disc = vz * vz + 2.0 * gravity * dz;
+    if (disc < 0.0) return here;            // cannot happen for dz > 0, but say so
+    const double t = (vz + std::sqrt(disc)) / gravity;
+    return here + t * Eigen::Vector2d(b(3), b(4));
+}
+
 std::array<double, 3> stepServosOnPlate(const TableKinematics& tk,
                                         const std::array<double, 3>& alpha_rad,
                                         const std::array<double, 3>& cmd_rad,

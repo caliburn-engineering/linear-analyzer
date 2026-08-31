@@ -394,6 +394,97 @@ Decided in [#17](https://github.com/caliburn-engineering/caliburn/issues/17).
 > Prose may still call the running page "the demo" — that is the artefact, not
 > the mode.
 
+### Contact, and the two phases
+
+The ball is no longer glued to the plate.  `RollingBallDynamics` still models
+the rolling half and is unchanged — it is a good model of a ball in contact —
+but whether the ball IS in contact is a question it cannot ask, because it has
+no normal force and no vertical state.
+
+`ball_contact.h` asks it.  `N/m = g(n·z) + n·c̈ + n·[ω̇×(Rs) + ω×(ω×(Rs))] +
+2n·(ω×Rṡ)` — gravity's share along the normal, the plate being driven up or
+down under the ball, the plate's rotation swinging the contact point, and
+Coriolis.  **`N/m ≤ 0` is separation**: a surface can push a ball and never
+pull it.
+
+This is not a corner case.  Measured under the shipped tuning and the shipped
+0.26 m/s kick, the ball separates in 30 of 72 kick directions — briefly, a few
+frames, hopping 6.7 mm.  The plate heaves hard because the legs do
+(`z_c = 0.30·sin α`, so a 20° leg swing is 74 mm of table in a tenth of a
+second), and a loop rejecting a disturbance slams the legs.
+
+**Two phases, two frames, and the frame is not a detail.**  Rolling is natural
+in the plate frame — that is where `RollingBallDynamics` integrates and where
+the cascade plant's state vector is written, and neither should change because
+the ball can leave.  Flight is natural in the world frame, because "only
+gravity acts" is a statement about an inertial frame.  Each phase keeps its own
+truth and `plateFrame` converts on demand.
+
+A launch takes the ball's **full** world velocity, including the plate's motion
+at the contact point — which is most of it when the legs are slamming.  Landing
+is inelastic: a real ball bounces, but a restitution coefficient is a number
+nobody here has measured, and the behaviour this exists to show does not depend
+on it.
+
+Decided in [#23](https://github.com/caliburn-engineering/caliburn/issues/23).
+
+> **A separation is a claim about the plate's velocity, so it is only as good
+> as that velocity.**
+> The rates come through the velocity Jacobian, `-J_pose⁻¹ J_alpha`, which
+> amplifies without bound near a singularity: an over-aggressive gain drives
+> the plate to a Jacobian condition number of 2464, and the rates that come
+> back would launch the ball a metre into the air off a 0.26 m/s nudge.  That
+> hop is arithmetic, not physics.  `PlateMotion::rates_trustworthy` carries the
+> credibility and the contact test declines to act without it, using the
+> threshold the application already shows the user — condition 20, where its
+> own readout turns red and says "Poor".  This is #22's lesson again: do not
+> act on a solve you cannot validate.
+
+> **An over-aggressive tuning does not merely overshoot — it throws the ball
+> off the plate.**
+> Q on ball position at 2000 loses the ball in 54 of 720 kick directions, with
+> launches reaching 689 mm.  Before this the same tuning looked merely fast,
+> because a glued ball cannot be thrown.  That is the honest ceiling on #19's
+> aggressive preset.
+
+### Trajectory tracking
+
+A moving setpoint: circle, square, triangle, or the fixed point the loop has
+always had.  Balancing at the centre proves stability; tracing a shape proves
+*tracking*, and it is far more legible to someone who does not read a
+pole-zero map.
+
+The path writes `sp_x_mm_` / `sp_y_mm_` rather than going round them, so the
+control law is untouched and the sliders become the readout of where the ball
+is being sent — the same arrangement the servo sliders have under the loop.
+Polygons are traversed at constant **speed**, not constant angle: a corner is
+where the interesting behaviour is, and sweeping an angle would crawl through
+it.
+
+**Velocity feedforward, decided by measurement.**  The reference state has
+always claimed the ball should be at the setpoint *and stationary*, which is
+false the moment the setpoint moves — so the loop spent its effort fighting the
+motion it was asked for.  Subtracting the path's velocity from the measured one
+is the same arithmetic as putting it in `x_ref`, since only the difference
+enters `u = -K(x - x_ref)`.  Measured on a 120 mm circle at a ten-second lap:
+**3.66 mm of mean error with it, 35.52 mm without** — nearly ten times, for two
+lines.  Without it the ball does not follow the circle so much as sit inside it.
+
+The corner survives that: a square is tracked to 14.4 mm at its corners against
+a circle's 5.1 mm on the same size and lap.  That is a bandwidth limit made
+visible, and it is the point of offering cornered shapes at all.
+
+Decided in [#24](https://github.com/caliburn-engineering/caliburn/issues/24).
+
+> **The sliders are bounded, and there are two bounds because there are two
+> ways to ask for the impossible.**
+> `kMaxSetpointSpeed` (250 mm/s) binds the large paths — beyond about 400 mm/s
+> the plate loses the ball outright — and `kMinLapSeconds` (2 s) binds the
+> small ones, where 250 mm/s round a 20 mm circle is a half-second lap and an
+> angular rate the plate cannot follow however short the distance.  Neither
+> implies the other.  A demo whose controls include a setting that breaks it is
+> not offering a choice, it is offering a trap.
+
 ### Rolling-friction dead band
 
 `RollingBallDynamics` opposes motion with `c_rr * g * sign(v)`, so a plate

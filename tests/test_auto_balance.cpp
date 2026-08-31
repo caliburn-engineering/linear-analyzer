@@ -14,6 +14,7 @@
 // every time the model moves.
 #include "auto_balance.h"
 
+#include "ball_contact.h"
 #include "ball_sim.h"
 #include "cascade_fixture.h"
 #include "table_kinematics.h"
@@ -281,32 +282,50 @@ SimResult runClosedLoop(const ModelEntry& e,
         kPlateBall, PlateParams{tp.R_table, cascadeGravity(e.params)});
 
     std::array<double, 3> alpha = {d.home_leg_rad, d.home_leg_rad, d.home_leg_rad};
-    Eigen::Vector4d ball = ball0;
+    BallState ball;
+    ball.rolling = ball0;
     TablePose pose = tk.home_pose(d.home_leg_rad);
+    PlateMotion pm = plateMotion(tk, pose, alpha, {0.0, 0.0, 0.0}), pm_prev = pm;
+    const double g = cascadeGravity(e.params);
 
     const double dt = 1.0 / 60.0;
     const int steps = static_cast<int>(duration / dt);
 
     SimResult r{0.0, 0.0, -1.0, 0.0, false};
     for (int k = 0; k < steps; ++k) {
-        const LegCommand c = legCommand(tk, d, alpha, ball, x_sp, y_sp);
+        const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
+        Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
+        if (ball.airborne) {
+            const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
+            seen << land(0), land(1), 0.0, 0.0;
+        }
+        const LegCommand c = legCommand(tk, d, alpha, seen, x_sp, y_sp);
+        std::array<double, 3> adot{};
+        for (int i = 0; i < 3; ++i)
+            adot[i] = (c.alpha_rad[i] - alpha[i]) / d.servo_tau;
         alpha = stepServosOnPlate(tk, alpha, c.alpha_rad, d.servo_tau, dt);
 
         const FKResult fk = tk.solve_pose(alpha, pose);
         if (fk.converged) pose = fk.pose;
+        pm_prev = pm;
+        pm = plateMotion(tk, pose, alpha, adot);
 
-        ball = stepBall(dynamics, ball, pose, dt);
+        ball = stepBallContact(dynamics, ball, pm, pm_prev, pose,
+                               kBallRadius, g, dt);
+        const Eigen::Matrix<double, 6, 1> now = plateFrame(ball, pm, kBallRadius);
 
-        const double radius = std::hypot(ball(0) - x_sp, ball(1) - y_sp);
+        const double radius = std::hypot(now(0) - x_sp, now(1) - y_sp);
         r.peak_radius = std::max(r.peak_radius, radius);
         if (radius > 0.005) r.settle_time = (k + 1) * dt;
-        if (!ballOnPlate(ball, tp.R_table, kBallRadius)) {
+        if (!ballOnPlate(Eigen::Vector4d(now(0), now(1), now(3), now(4)),
+                         tp.R_table, kBallRadius)) {
             r.left_plate = true;
             r.final_radius = radius;
             return r;
         }
     }
-    r.final_radius = std::hypot(ball(0) - x_sp, ball(1) - y_sp);
+    const Eigen::Matrix<double, 6, 1> fin = plateFrame(ball, pm, kBallRadius);
+    r.final_radius = std::hypot(fin(0) - x_sp, fin(1) - y_sp);
     r.final_tilt_deg = std::max(std::abs(pose.phi), std::abs(pose.theta)) / kDeg;
     if (r.settle_time >= duration - dt) r.settle_time = -1.0;
     return r;

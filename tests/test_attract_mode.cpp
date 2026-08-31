@@ -15,6 +15,7 @@
 #include "attract_mode.h"
 
 #include "auto_balance.h"
+#include "ball_contact.h"
 #include "ball_sim.h"
 #include "cascade_fixture.h"
 #include "table_kinematics.h"
@@ -133,6 +134,8 @@ struct DemoRun {
     std::vector<Sample> trace;
     bool left_plate = false;
     int kicks = 0;
+    int airborne_frames = 0;   ///< the ball can leave upward now, see #23
+    double peak_height = 0.0;  ///< [m] above the plate surface
 };
 
 // PlateView::step's calls, in PlateView::step's order: legCommand ->
@@ -156,30 +159,49 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
         kPlateBall, PlateParams{tp.R_table, cascadeGravity(e.params)});
 
     std::array<double, 3> alpha = {d.home_leg_rad, d.home_leg_rad, d.home_leg_rad};
-    Eigen::Vector4d ball = attractStart(s);
+    BallState ball;
+    ball.rolling = attractStart(s);
     TablePose pose = tk.home_pose(d.home_leg_rad);
+    PlateMotion pm = plateMotion(tk, pose, alpha, {0.0, 0.0, 0.0}), pm_prev = pm;
 
     const double dt = 1.0 / 60.0;
     const int steps = static_cast<int>(duration / dt);
+    const double g = cascadeGravity(e.params);
 
     DemoRun r;
     double t = 0.0;
-    r.trace.push_back({0.0, std::hypot(ball(0), ball(1))});
+    r.trace.push_back({0.0, std::hypot(ball.rolling(0), ball.rolling(1))});
     for (int k = 0; k < steps; ++k) {
-        const LegCommand c = legCommand(tk, d, alpha, ball, 0.0, 0.0);
+        const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
+        Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
+        if (ball.airborne) {
+            const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
+            seen << land(0), land(1), 0.0, 0.0;
+        }
+        const LegCommand c = legCommand(tk, d, alpha, seen, 0.0, 0.0);
         t += dt;
+        std::array<double, 3> adot{};
+        for (int i = 0; i < 3; ++i)
+            adot[i] = (c.alpha_rad[i] - alpha[i]) / d.servo_tau;
         alpha = stepServosOnPlate(tk, alpha, c.alpha_rad, d.servo_tau, dt);
 
         const FKResult fk = tk.solve_pose(alpha, pose);
         if (fk.converged) pose = fk.pose;
+        pm_prev = pm;
+        pm = plateMotion(tk, pose, alpha, adot);
 
         for (const int due = attractKicksBy(s, t); r.kicks < due; ++r.kicks)
-            ball += attractKick(s, r.kicks);
+            if (!ball.airborne) ball.rolling += attractKick(s, r.kicks);
 
-        ball = stepBall(dynamics, ball, pose, dt);
+        ball = stepBallContact(dynamics, ball, pm, pm_prev, pose,
+                               kBallRadius, g, dt);
+        if (ball.airborne) ++r.airborne_frames;
 
-        r.trace.push_back({t, std::hypot(ball(0), ball(1))});
-        if (!ballOnPlate(ball, tp.R_table, kBallRadius)) {
+        const Eigen::Matrix<double, 6, 1> now = plateFrame(ball, pm, kBallRadius);
+        r.peak_height = std::max(r.peak_height, now(2) - kBallRadius);
+        r.trace.push_back({t, std::hypot(now(0), now(1))});
+        if (!ballOnPlate(Eigen::Vector4d(now(0), now(1), now(3), now(4)),
+                         tp.R_table, kBallRadius)) {
             r.left_plate = true;
             return r;
         }
@@ -304,7 +326,10 @@ double sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
 
     std::array<double, 3> alpha = {d.home_leg_rad, d.home_leg_rad, d.home_leg_rad};
     TablePose pose = tk.home_pose(d.home_leg_rad);
-    Eigen::Vector4d ball = attractStart(s);
+    BallState ball;
+    ball.rolling = attractStart(s);
+    PlateMotion pm = plateMotion(tk, pose, alpha, {0.0, 0.0, 0.0}), pm_prev = pm;
+    const double g = cascadeGravity(e.params);
 
     const double dt = 1.0 / 60.0;
     double peak = 0.0;
@@ -313,22 +338,37 @@ double sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
     const int settle = static_cast<int>(s.first_kick_s / dt);
     const int total = settle + static_cast<int>(12.0 / dt);
     for (int k = 0; k < total; ++k) {
-        if (k == settle) {
-            ball(2) += s.speed * std::cos(theta);
-            ball(3) += s.speed * std::sin(theta);
+        if (k == settle && !ball.airborne) {
+            ball.rolling(2) += s.speed * std::cos(theta);
+            ball.rolling(3) += s.speed * std::sin(theta);
         }
-        const LegCommand c = legCommand(tk, d, alpha, ball, 0.0, 0.0);
+        const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
+        Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
+        if (ball.airborne) {
+            const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
+            seen << land(0), land(1), 0.0, 0.0;
+        }
+        const LegCommand c = legCommand(tk, d, alpha, seen, 0.0, 0.0);
+        std::array<double, 3> adot{};
+        for (int i = 0; i < 3; ++i)
+            adot[i] = (c.alpha_rad[i] - alpha[i]) / d.servo_tau;
         alpha = stepServosOnPlate(tk, alpha, c.alpha_rad, d.servo_tau, dt);
         const FKResult fk = tk.solve_pose(alpha, pose);
         // The plate always has an assembly now.  A stronger statement than
         // "the ball stayed on", and the one the fix actually makes.
         ASSERT_TRUE(fk.converged);
         pose = fk.pose;
-        ball = stepBall(dynamics, ball, pose, dt);
-        if (k >= settle) peak = std::max(peak, std::hypot(ball(0), ball(1)));
-        ASSERT_TRUE(ballOnPlate(ball, tp.R_table, kBallRadius));
+        pm_prev = pm;
+        pm = plateMotion(tk, pose, alpha, adot);
+        ball = stepBallContact(dynamics, ball, pm, pm_prev, pose,
+                               kBallRadius, g, dt);
+        const Eigen::Matrix<double, 6, 1> now = plateFrame(ball, pm, kBallRadius);
+        if (k >= settle) peak = std::max(peak, std::hypot(now(0), now(1)));
+        ASSERT_TRUE(ballOnPlate(Eigen::Vector4d(now(0), now(1), now(3), now(4)),
+                                tp.R_table, kBallRadius));
     }
-    ASSERT_TRUE(std::hypot(ball(0), ball(1)) < kHome);   // and came home
+    const Eigen::Matrix<double, 6, 1> end = plateFrame(ball, pm, kBallRadius);
+    ASSERT_TRUE(std::hypot(end(0), end(1)) < kHome);   // and came home
     return peak;
 }
 
@@ -348,18 +388,42 @@ void test_the_kick_is_rejected_from_every_direction() {
     // Visible, and nowhere near the edge: 30 mm against the 280 mm the plate
     // has.  Measured; the assertion is loose around it on purpose.
     ASSERT_TRUE(worst_peak > 0.018);
-    ASSERT_TRUE(worst_peak < 0.06);
+    // Wider than it was before #23: a ball that hops carries its speed without
+    // rolling friction, so it lands further out.  Still a quarter of what the
+    // plate has.
+    ASSERT_TRUE(worst_peak < 0.09);
 }
 
 // "A tuning that genuinely saturates the legs still recovers."
 //
-// Q on ball position at 2000 against unit input weights is far past anything
-// the preset work in #19 proposes.  It saturates the legs from every direction
-// tested and is workspace-clipped from every one of them — measured, all 180 —
-// and still brings the ball back, in 0.35 s, without the plate ever being left
-// without an assembly.  That is the retreat doing its job under the worst
-// tuning the design surface can produce, rather than under the shipped one.
+// Q on ball position at 200 saturates the legs and is clipped against the
+// workspace from every direction, and still brings the ball back from all 180
+// tested without losing it — measured 0 of 720 at this weight.  That is the
+// workspace retreat doing its job under a tuning harder than the shipped one.
 void test_a_saturating_tuning_still_recovers() {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+
+    Eigen::VectorXd q(7);
+    q << 1, 1, 1, 200, 200, 2, 2;
+    const Eigen::MatrixXd K = gainFor(e, q, defaultLqrInputWeights(3));
+
+    for (int i = 0; i < 180; ++i)
+        sweepOneDirection(e, K, AttractSchedule{}, i * M_PI / 90.0);
+}
+
+// And the fact that only exists now the ball can leave: an over-aggressive
+// tuning does not merely overshoot, it THROWS THE BALL OFF THE PLATE.
+//
+// Q at 2000 slams the legs hard enough that the plate is moving out from under
+// the ball rather than tilting under it: measured, 54 of 720 kick directions
+// end with the ball gone, and one launch reached 689 mm of altitude.  Before
+// #23 the same tuning looked merely fast — 0.35 s to settle — because a ball
+// glued to the plate cannot be thrown off it.
+//
+// This is the honest ceiling on #19's aggressive preset, and a far better
+// demonstration of over-aggressive control than a settling time.
+void test_an_over_aggressive_tuning_throws_the_ball_off() {
     const auto models = getBuiltinModels();
     const auto& e = cascadeModel(models);
 
@@ -367,8 +431,60 @@ void test_a_saturating_tuning_still_recovers() {
     q << 1, 1, 1, 2000, 2000, 2, 2;
     const Eigen::MatrixXd K = gainFor(e, q, defaultLqrInputWeights(3));
 
-    for (int i = 0; i < 180; ++i)
-        sweepOneDirection(e, K, AttractSchedule{}, i * M_PI / 90.0);
+    const TableParams tp = cascadeMechanism(e.params);
+    const TableKinematics tk(tp);
+    AutoBalanceDesign d;
+    d.K = K;
+    d.home_leg_rad = cascadeHomeLegAngle(e.params);
+    d.servo_tau = cascadeServoTau(e.params);
+    d.alpha_min_rad = tp.alpha_min;
+    d.alpha_max_rad = tp.alpha_max;
+    const double g = cascadeGravity(e.params);
+    const RollingBallDynamics dynamics(kPlateBall, PlateParams{tp.R_table, g});
+    const AttractSchedule s;
+    const double dt = 1.0 / 60.0;
+
+    int lost = 0;
+    double peak_hop = 0.0;
+    for (int i = 0; i < 90; ++i) {
+        const double theta = i * M_PI / 45.0;
+        std::array<double, 3> alpha = {d.home_leg_rad, d.home_leg_rad, d.home_leg_rad};
+        TablePose pose = tk.home_pose(d.home_leg_rad);
+        BallState ball;
+        ball.rolling = attractStart(s);
+        PlateMotion pm = plateMotion(tk, pose, alpha, {0.0, 0.0, 0.0}), pm_prev = pm;
+
+        const int settle = static_cast<int>(s.first_kick_s / dt);
+        for (int k = 0; k < settle + static_cast<int>(6.0 / dt); ++k) {
+            if (k == settle && !ball.airborne) {
+                ball.rolling(2) += s.speed * std::cos(theta);
+                ball.rolling(3) += s.speed * std::sin(theta);
+            }
+            const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
+            Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
+            if (ball.airborne) {
+                const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
+                seen << land(0), land(1), 0.0, 0.0;
+            }
+            const LegCommand c = legCommand(tk, d, alpha, seen, 0.0, 0.0);
+            std::array<double, 3> adot{};
+            for (int j = 0; j < 3; ++j)
+                adot[j] = (c.alpha_rad[j] - alpha[j]) / d.servo_tau;
+            alpha = stepServosOnPlate(tk, alpha, c.alpha_rad, d.servo_tau, dt);
+            const FKResult fk = tk.solve_pose(alpha, pose);
+            if (fk.converged) pose = fk.pose;
+            pm_prev = pm;
+            pm = plateMotion(tk, pose, alpha, adot);
+            ball = stepBallContact(dynamics, ball, pm, pm_prev, pose,
+                                   kBallRadius, g, dt);
+            const Eigen::Matrix<double, 6, 1> now = plateFrame(ball, pm, kBallRadius);
+            peak_hop = std::max(peak_hop, now(2) - kBallRadius);
+            if (!ballOnPlate(Eigen::Vector4d(now(0), now(1), now(3), now(4)),
+                             tp.R_table, kBallRadius)) { ++lost; break; }
+        }
+    }
+    ASSERT_TRUE(lost > 0);            // it really does lose the ball
+    ASSERT_TRUE(peak_hop > 0.05);     // and really does launch it, metres not mm
 }
 
 // Ten minutes unattended.  The failure this pins is the one that shipped: the
@@ -403,6 +519,7 @@ int main() {
     test_a_minute_unattended_never_loses_the_ball();
     test_the_kick_is_rejected_from_every_direction();
     test_a_saturating_tuning_still_recovers();
+    test_an_over_aggressive_tuning_throws_the_ball_off();
     test_ten_minutes_unattended_never_loses_the_ball();
     std::printf("test_attract_mode: all passed\n");
     return 0;
