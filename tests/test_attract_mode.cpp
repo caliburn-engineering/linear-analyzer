@@ -190,8 +190,13 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
         pm_prev = pm;
         pm = plateMotion(tk, pose, alpha, adot);
 
-        for (const int due = attractKicksBy(s, t); r.kicks < due; ++r.kicks)
-            if (!ball.airborne) ball.rolling += attractKick(s, r.kicks);
+        // `PlateView::stepAttract`'s rule exactly: a kick is held, not spent,
+        // while the ball is off the plate.  The guard and the count move
+        // together — a kick the airborne ball never received is still owed.
+        if (!ball.airborne && attractKicksBy(s, t) > r.kicks) {
+            ball.rolling += attractKick(s, r.kicks);
+            ++r.kicks;
+        }
 
         ball = stepBallContact(dynamics, ball, pm, pm_prev, pose,
                                kBallRadius, g, dt);
@@ -311,8 +316,17 @@ void test_a_minute_unattended_never_loses_the_ball() {
 // plate at exact centre would be an easier test than the thing it stands in
 // for: #22's real failure had the ball at +3.4, -3.3 mm with the legs already
 // displaced.
-double sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
-                         const AttractSchedule& s, double theta) {
+/// What one kick did: how far out the ball got, and whether it left the plate
+/// on the way.  Separation is reported rather than inferred from the reach,
+/// because a hop and a wide roll look identical in a radius.
+struct Sweep {
+    double peak_radius = 0.0;   ///< [m] from centre
+    bool separated = false;
+    double peak_height = 0.0;   ///< [m] above the surface
+};
+
+Sweep sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
+                        const AttractSchedule& s, double theta) {
     const TableParams tp = cascadeMechanism(e.params);
     const TableKinematics tk(tp);
     AutoBalanceDesign d;
@@ -332,6 +346,7 @@ double sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
     const double g = cascadeGravity(e.params);
 
     const double dt = 1.0 / 60.0;
+    Sweep sw;
     double peak = 0.0;
     // Settle out of the opening displacement first, exactly as the demo does,
     // then kick from wherever that left everything.
@@ -362,14 +377,17 @@ double sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
         pm = plateMotion(tk, pose, alpha, adot);
         ball = stepBallContact(dynamics, ball, pm, pm_prev, pose,
                                kBallRadius, g, dt);
+        if (ball.airborne) sw.separated = true;
         const Eigen::Matrix<double, 6, 1> now = plateFrame(ball, pm, kBallRadius);
         if (k >= settle) peak = std::max(peak, std::hypot(now(0), now(1)));
+        sw.peak_height = std::max(sw.peak_height, now(2) - kBallRadius);
         ASSERT_TRUE(ballOnPlate(Eigen::Vector4d(now(0), now(1), now(3), now(4)),
                                 tp.R_table, kBallRadius));
     }
     const Eigen::Matrix<double, 6, 1> end = plateFrame(ball, pm, kBallRadius);
     ASSERT_TRUE(std::hypot(end(0), end(1)) < kHome);   // and came home
-    return peak;
+    sw.peak_radius = peak;
+    return sw;
 }
 
 // Every direction, not the handful the schedule reaches.  A kick the loop
@@ -383,11 +401,13 @@ void test_the_kick_is_rejected_from_every_direction() {
     for (int i = 0; i < 720; ++i)
         worst_peak = std::max(worst_peak,
                               sweepOneDirection(e, K, AttractSchedule{},
-                                                i * M_PI / 360.0));
+                                                i * M_PI / 360.0).peak_radius);
 
     // Visible, and nowhere near the edge: 30 mm against the 280 mm the plate
     // has.  Measured; the assertion is loose around it on purpose.
     ASSERT_TRUE(worst_peak > 0.018);
+    // (Separation across this same sweep is pinned by
+    // `test_the_shipped_tuning_hops_in_a_stated_fraction_of_directions`.)
     // Wider than it was before #23: a ball that hops carries its speed without
     // rolling friction, so it lands further out.  Still a quarter of what the
     // plate has.
@@ -410,6 +430,40 @@ void test_a_saturating_tuning_still_recovers() {
 
     for (int i = 0; i < 180; ++i)
         sweepOneDirection(e, K, AttractSchedule{}, i * M_PI / 90.0);
+}
+
+// #23 asks for the shipped tuning's behaviour to be STATED: does it hop, and
+// how often.  Stating it in CONTEXT.md makes it prose that can rot; stating it
+// here makes it a fact that fails when it stops being true.
+//
+// 30 of 72 directions, measured — a bit under half, and the same 30 whether
+// rolling resistance is scaled by the normal force or by g, because separation
+// is decided by `normalAccel` and friction does not enter it.  The bounds are
+// wide around the measurement on purpose: this is a claim about the tuning
+// being on the hopping side of the line and staying there, not a transcript of
+// one LQR solve.  A tuning that hopped in 2 of 72 would be a demo where the
+// visitor never sees the effect the ticket exists for; one that hopped in 70
+// would be a plate throwing the ball around.
+void test_the_shipped_tuning_hops_in_a_stated_fraction_of_directions() {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+    const Eigen::MatrixXd K = defaultGain(e);
+
+    int separated = 0;
+    double worst_hop = 0.0;
+    for (int i = 0; i < 72; ++i) {
+        const Sweep sw = sweepOneDirection(e, K, AttractSchedule{},
+                                           i * 2.0 * M_PI / 72.0);
+        if (sw.separated) ++separated;
+        worst_hop = std::max(worst_hop, sw.peak_height);
+    }
+
+    ASSERT_TRUE(separated > 15);
+    ASSERT_TRUE(separated < 50);
+    // And briefly: 6.6 mm measured, against a 40 mm ball.  The hop is meant to
+    // be legible in the 3D view, not to dominate it.
+    ASSERT_TRUE(worst_hop > 0.002);
+    ASSERT_TRUE(worst_hop < 0.030);
 }
 
 // And the fact that only exists now the ball can leave: an over-aggressive
@@ -497,6 +551,22 @@ void test_ten_minutes_unattended_never_loses_the_ball() {
 
     const DemoRun r = runDemo(e, defaultGain(e), AttractSchedule{}, 600.0);
     ASSERT_TRUE(!r.left_plate);
+
+    // The shipped tuning hops, and this is the assertion that says so — #23's
+    // headline fact, which was prose in CONTEXT.md and nothing in the suite.
+    //
+    // Both bounds matter and they say different things.  Above zero: the ball
+    // really does leave, so a change that quietly re-glues it to the plate
+    // fails here rather than in a browser.  Below: it leaves BRIEFLY — 190
+    // frames of flight in 36000, half a percent of a ten-minute run, over 150
+    // kicks.  A tuning that hopped for a tenth of the run would be a different
+    // demo, and would still pass "the ball stayed on the plate".
+    ASSERT_TRUE(r.airborne_frames > 0);
+    ASSERT_TRUE(r.airborne_frames < 600);
+    // Millimetres, not centimetres: 6.1 mm measured, and a hop of 50 mm would
+    // be a plate throwing the ball rather than one recovering under it.
+    ASSERT_TRUE(r.peak_height > 0.001);
+    ASSERT_TRUE(r.peak_height < 0.050);
     ASSERT_TRUE(r.kicks >= 140);
 
     const TableParams tp = cascadeMechanism(e.params);
@@ -518,6 +588,7 @@ int main() {
     test_every_kick_is_visible_and_recovered_before_the_next();
     test_a_minute_unattended_never_loses_the_ball();
     test_the_kick_is_rejected_from_every_direction();
+    test_the_shipped_tuning_hops_in_a_stated_fraction_of_directions();
     test_a_saturating_tuning_still_recovers();
     test_an_over_aggressive_tuning_throws_the_ball_off();
     test_ten_minutes_unattended_never_loses_the_ball();

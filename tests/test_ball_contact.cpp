@@ -163,6 +163,14 @@ RollingBallDynamics roller() {
 // A ball on a plate that is behaving itself never leaves, and the rolling path
 // is bit-for-bit the one `stepBall` gives — the contact layer adds a question,
 // not a different answer.
+//
+// `stepBall` has to be told the same normal force the contact layer computed,
+// which since #23 is the plate's cosine share of gravity and not `g`.  On a
+// motionless plate `normalAccel` reduces to exactly `quasiStaticNormalAccel`,
+// so this stays an equality rather than becoming a tolerance.  Handing the bare
+// roller `g` here instead would compare the contact model against a ball on a
+// LEVEL plate, which at 2 deg of tilt disagrees in the fourth decimal — the
+// divergence this assertion exists to catch.
 void test_a_settled_plate_never_lets_go() {
     const TableKinematics tk(plate());
     const RollingBallDynamics dyn = roller();
@@ -175,7 +183,7 @@ void test_a_settled_plate_never_lets_go() {
 
     for (int k = 0; k < 240; ++k) {
         b = stepBallContact(dyn, b, m, m, pose, kR, kG, 1.0 / 60.0);
-        bare = stepBall(dyn, bare, pose, 1.0 / 60.0);
+        bare = stepBall(dyn, bare, pose, quasiStaticNormalAccel(m, kG), 1.0 / 60.0);
         ASSERT_TRUE(!b.airborne);
     }
     for (int i = 0; i < 4; ++i) ASSERT_NEAR(b.rolling(i), bare(i), 1e-15);
@@ -294,6 +302,85 @@ void test_the_two_frames_describe_the_same_ball() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// The trust gate
+// ---------------------------------------------------------------------------
+//
+// A separation is a claim about the plate's VELOCITY, and those rates come
+// through `-J_pose^-1 J_alpha`, which near a singularity amplifies without
+// bound.  `rates_trustworthy` is what stops the contact model acting on rates
+// the mechanism's own condition number says are meaningless — the guard
+// CONTEXT.md gives a pull-quote to, and which nothing tested.
+
+// A plate diving hard enough to leave the ball behind — but whose rates nobody
+// believes — keeps the ball.  Refusing to act is the whole point of the guard:
+// the alternative is a hop that is arithmetic rather than physics.
+void test_untrustworthy_rates_never_separate_the_ball() {
+    const TableKinematics tk(plate());
+    const RollingBallDynamics dyn = roller();
+    const double dt = 1.0 / 60.0;
+
+    // Falling at 3g, which for a trusted plate is a launch (see the parabola
+    // test above), and the only difference here is the flag.
+    PlateMotion prev = still(tk, 0, 0, 0.2121);
+    PlateMotion now = still(tk, 0, 0, 0.2121 - 0.5 * 3.0 * kG * dt * dt);
+    now.c_dot = Eigen::Vector3d(0, 0, -3.0 * kG * dt);
+
+    BallState trusted;
+    trusted.rolling << 0.03, 0.0, 0.0, 0.0;
+    BallState doubted = trusted;
+
+    now.rates_trustworthy = true;
+    prev.rates_trustworthy = true;
+    trusted = stepBallContact(dyn, trusted, now, prev, TablePose{0, 0, 0.2121},
+                              kR, kG, dt);
+    ASSERT_TRUE(trusted.airborne);
+
+    now.rates_trustworthy = false;
+    doubted = stepBallContact(dyn, doubted, now, prev, TablePose{0, 0, 0.2121},
+                              kR, kG, dt);
+    ASSERT_TRUE(!doubted.airborne);
+}
+
+// And the half of the gate that was missing: `normalAccel` reaches an
+// acceleration by differencing `now` against `prev`, so the FIRST believable
+// frame after a singular stretch is differenced against a garbage one.  Trust
+// has to cover both ends of that difference or the guard leaks exactly the hop
+// it exists to refuse.
+void test_a_trustworthy_frame_after_an_untrusted_one_still_declines() {
+    const TableKinematics tk(plate());
+    const RollingBallDynamics dyn = roller();
+    const double dt = 1.0 / 60.0;
+
+    // `prev` carries a wild rate — the arithmetic a near-singular Jacobian
+    // hands back — and `now` is a plate sitting still.  Differenced, that reads
+    // as an enormous upward acceleration reversing, and the ball is reported
+    // to leave a motionless plate.
+    PlateMotion prev = still(tk, 0, 0, 0.2121);
+    prev.c_dot = Eigen::Vector3d(0, 0, 12.0);
+    prev.rates_trustworthy = false;
+
+    PlateMotion now = still(tk, 0, 0, 0.2121);
+    now.rates_trustworthy = true;
+
+    BallState b;
+    b.rolling << 0.03, 0.0, 0.0, 0.0;
+
+    // The rates alone would say separation; the gate says no.
+    const double N = normalAccel(now, prev, dt,
+                                 Eigen::Vector3d(0.03, 0.0, kR),
+                                 Eigen::Vector2d::Zero(), kG);
+    ASSERT_TRUE(N < 0.0);
+
+    b = stepBallContact(dyn, b, now, prev, TablePose{0, 0, 0.2121}, kR, kG, dt);
+    ASSERT_TRUE(!b.airborne);
+}
+
+// The threshold is the application's own "Poor" line, not a second opinion.
+void test_the_trust_threshold_is_the_condition_number_the_app_shows() {
+    ASSERT_NEAR(kRatesUntrustworthyAbove, 20.0, 1e-15);
+}
+
 int main() {
     test_a_still_level_plate_holds_the_ball_at_one_g();
     test_a_tilted_still_plate_holds_the_cosine_share();
@@ -305,6 +392,9 @@ int main() {
     test_a_dropped_plate_launches_the_ball_on_a_parabola();
     test_the_ball_lands_and_rolls_on();
     test_the_two_frames_describe_the_same_ball();
+    test_untrustworthy_rates_never_separate_the_ball();
+    test_a_trustworthy_frame_after_an_untrusted_one_still_declines();
+    test_the_trust_threshold_is_the_condition_number_the_app_shows();
     std::printf("test_ball_contact: all passed\n");
     return 0;
 }

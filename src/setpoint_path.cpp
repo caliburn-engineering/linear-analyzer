@@ -34,12 +34,10 @@ struct Along {
 };
 
 Along along(const SetpointPath& p, double t, int n) {
-    const double side = 2.0 * p.radius_m * std::sin(M_PI / n);
     const double lap = (p.period_s > 0.0) ? std::fmod(t / p.period_s, 1.0) : 0.0;
     const double u = (lap < 0.0 ? lap + 1.0 : lap) * n;   // edges travelled
     int edge = static_cast<int>(u) % n;
     double frac = u - std::floor(u);
-    (void)side;
     return {edge, frac};
 }
 

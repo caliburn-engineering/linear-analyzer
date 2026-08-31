@@ -397,9 +397,9 @@ Decided in [#17](https://github.com/caliburn-engineering/caliburn/issues/17).
 ### Contact, and the two phases
 
 The ball is no longer glued to the plate.  `RollingBallDynamics` still models
-the rolling half and is unchanged — it is a good model of a ball in contact —
-but whether the ball IS in contact is a question it cannot ask, because it has
-no normal force and no vertical state.
+the rolling half — it is a good model of a ball in contact — but whether the
+ball IS in contact is a question it could not ask, because it had no normal
+force and no vertical state.
 
 `ball_contact.h` asks it.  `N/m = g(n·z) + n·c̈ + n·[ω̇×(Rs) + ω×(ω×(Rs))] +
 2n·(ω×Rṡ)` — gravity's share along the normal, the plate being driven up or
@@ -425,6 +425,21 @@ at the contact point — which is most of it when the legs are slamming.  Landin
 is inelastic: a real ball bounces, but a restitution coefficient is a number
 nobody here has measured, and the behaviour this exists to show does not depend
 on it.
+
+**Rolling resistance is scaled by that same normal force, not by `g`.**  It is a
+normal-force effect — the contact patch deforms in proportion to how hard the
+surface is pressed — so the retarding acceleration is `c_rr·(N/m)`, and
+`c_rr·g` was only ever the level-plate-at-rest special case.  `derivatives` and
+`stepBall` take it as an argument; `quasiStaticNormalAccel` supplies `g(n·z)`
+for the one caller that cannot have the real thing, the frame where the rates
+are not trustworthy, and for linearising about the flat equilibrium.
+
+The correction is one of principle rather than of magnitude, and it is worth
+being plain about that.  It moves the separation count not at all — 30 of 72
+directions either way, and the peak hop by 0.0001 mm — because separation is
+decided by `normalAccel`, which friction does not enter, and because near
+separation `N` is small and so is anything scaled by it.  What it does change
+is the dead band's derivation, from `asin(c_rr)` to `atan(c_rr)`; see below.
 
 Decided in [#23](https://github.com/caliburn-engineering/caliburn/issues/23).
 
@@ -487,9 +502,17 @@ Decided in [#24](https://github.com/caliburn-engineering/caliburn/issues/24).
 
 ### Rolling-friction dead band
 
-`RollingBallDynamics` opposes motion with `c_rr * g * sign(v)`, so a plate
-tilted by less than `asin(c_rr) = 0.573 deg` **cannot start the ball moving at
-all**.  A state feedback has no integral term and therefore no way out: it
+`RollingBallDynamics` opposes motion with `c_rr * (N/m) * sign(v)`, so a plate
+tilted by less than `atan(c_rr) = 0.573 deg` **cannot start the ball moving at
+all**: the tangential pull is `g sin(t)` and the resistance `c_rr g cos(t)`, so
+the band closes where `tan(t) = c_rr`.
+
+The derivation moved with #23 and the number did not.  Before the normal force
+was computed, the resistance was scaled by `g` outright, which put the edge at
+`asin(c_rr)` instead — 0.5729673 deg against 0.5729387 deg, a difference of
+2.9e-5 deg, or one twenty-thousandth of the tolerance the test pins it to.  The
+two agree to four decimals for any `c_rr` this small, so no test number changed;
+what changed is which of them is *true*.  A state feedback has no integral term and therefore no way out: it
 parks the ball wherever the tilt it is asking for falls inside the band.
 
 This is not modelled in the linear plant at all, and it is why the LQR designer

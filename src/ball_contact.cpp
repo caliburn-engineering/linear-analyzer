@@ -65,6 +65,10 @@ double normalAccel(const PlateMotion& now,
     return gravity_share + heave + angular + coriolis;
 }
 
+double quasiStaticNormalAccel(const PlateMotion& plate, double gravity) {
+    return gravity * plate.normal().z();
+}
+
 void worldOf(const BallState& b, const PlateMotion& plate, double ball_radius,
              Eigen::Vector3d* p, Eigen::Vector3d* v) {
     if (b.airborne) {
@@ -120,8 +124,16 @@ BallState stepBallContact(const RollingBallDynamics& dynamics,
         // No opinion without trustworthy rates.  Staying in contact is the
         // conservative answer and the honest one: the ball was on the plate a
         // moment ago and nothing believable says it left.
-        if (!now.rates_trustworthy) {
-            out.rolling = stepBall(dynamics, out.rolling, pose, dt);
+        //
+        // BOTH frames have to be trustworthy, not just this one: `normalAccel`
+        // reaches the acceleration by differencing `now` against `prev`, so a
+        // believable frame differenced against a garbage one is a garbage
+        // acceleration.  Guarding only `now` would let the first good frame on
+        // the way out of a singularity report a separation built entirely from
+        // the rates the guard exists to refuse.
+        if (!now.rates_trustworthy || !prev.rates_trustworthy) {
+            out.rolling = stepBall(dynamics, out.rolling, pose,
+                                   quasiStaticNormalAccel(now, gravity), dt);
             return out;
         }
         const double N = normalAccel(now, prev, dt,
@@ -130,7 +142,12 @@ BallState stepBallContact(const RollingBallDynamics& dynamics,
                                      Eigen::Vector2d(out.rolling(2), out.rolling(3)),
                                      gravity);
         if (N > 0.0) {
-            out.rolling = stepBall(dynamics, out.rolling, pose, dt);
+            // The same N that decided the ball is still touching also says how
+            // hard it is pressed, and rolling resistance is a normal-force
+            // effect: a ball on a plate dropping away beneath it is barely
+            // retarded at all, and one in a plate's upswing is retarded more
+            // than its weight alone would explain.  #23.
+            out.rolling = stepBall(dynamics, out.rolling, pose, N, dt);
             return out;
         }
         // Contact is over.  The ball keeps the velocity it had, all of it.

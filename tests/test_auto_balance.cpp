@@ -428,7 +428,7 @@ void test_poor_tuning_visibly_degrades() {
     ASSERT_TRUE(held.final_radius > 0.05);  // and never really tried
     // Stalled inside the dead band rather than converging slowly: the tilt it
     // is asking for is one the ball cannot be started by.
-    ASSERT_TRUE(held.final_tilt_deg < std::asin(kBallFriction) / kDeg);
+    ASSERT_TRUE(held.final_tilt_deg < std::atan(kBallFriction) / kDeg);
 
     const SimResult kicked = runClosedLoop(
         e, K_poor, Eigen::Vector4d(0.0, 0.0, 0.35, 0.25), 0.0, 0.0, 20.0);
@@ -439,7 +439,7 @@ void test_poor_tuning_visibly_degrades() {
 
 // Why the defaults above are not unit weights, kept as a fact rather than a
 // memory.  The rolling model's Coulomb resistance is a dead band: below
-// asin(c_rr) of tilt the ball cannot be started at all, and a state feedback
+// atan(c_rr) of tilt the ball cannot be started at all, and a state feedback
 // with no integral term parks inside it.  A future reader will meet this as
 // "the ball stops 37 mm off centre and the plate just sits there tilted", and
 // it is a property of the plant, not a defect in the loop.
@@ -458,7 +458,7 @@ void test_unit_weights_park_in_the_friction_dead_band() {
     // within a tenth of it, because sign(v) leaves the ball creeping rather
     // than stopping dead.  An order of magnitude below the 8 deg the working
     // tuning uses, which is the whole difference between the two runs.
-    ASSERT_NEAR(s.final_tilt_deg, std::asin(kBallFriction) / kDeg, 0.06);
+    ASSERT_NEAR(s.final_tilt_deg, std::atan(kBallFriction) / kDeg, 0.06);
 }
 
 }  // namespace

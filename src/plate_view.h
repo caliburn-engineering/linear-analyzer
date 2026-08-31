@@ -200,7 +200,6 @@ private:
     BallState ball_{};
     PlateMotion plate_motion_{};   ///< this frame's, for the contact test
     PlateMotion plate_motion_prev_{};
-    bool ball_was_airborne_ = false;
     float airborne_flash_s_ = 0.0f;  ///< keeps a brief hop legible in the panel
     bool ball_enabled_ = true;
     bool ball_on_plate_ = true;

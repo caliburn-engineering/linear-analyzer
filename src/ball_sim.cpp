@@ -14,13 +14,23 @@ BallTilt ballTiltFromPose(const TablePose& pose) {
 Eigen::Vector4d stepBall(const RollingBallDynamics& dynamics,
                          const Eigen::Vector4d& state,
                          const TablePose& pose,
+                         double normal_accel,
                          double dt) {
     const BallTilt tilt = ballTiltFromPose(pose);
     DerivativeFn f = [&](double, const Eigen::VectorXd& y) -> Eigen::VectorXd {
-        return dynamics.derivatives(Eigen::Vector4d(y), tilt.alpha, tilt.beta);
+        return dynamics.derivatives(Eigen::Vector4d(y), tilt.alpha, tilt.beta,
+                                    normal_accel);
     };
     Eigen::VectorXd next = rk4_step(Eigen::VectorXd(state), 0.0, dt, f);
     return Eigen::Vector4d(next);
+}
+
+Eigen::Vector4d stepBall(const RollingBallDynamics& dynamics,
+                         const Eigen::Vector4d& state,
+                         const TablePose& pose,
+                         double dt) {
+    return stepBall(dynamics, state, pose,
+                    dynamics.plate_params().gravity, dt);
 }
 
 bool ballOnPlate(const Eigen::Vector4d& state,

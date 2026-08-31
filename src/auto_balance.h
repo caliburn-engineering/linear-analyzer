@@ -150,9 +150,13 @@ Retreat retreatToWorkspace(const TableKinematics& tk,
 ///
 /// Solves `z + vz t - g t^2 / 2 = r` for the positive root and carries the
 /// horizontal motion forward.  Returns the present position unchanged for a
-/// ball that is not going to land — one already at or below the surface, or
-/// thrown so hard the quadratic has no root — because a prediction nobody can
-/// act on is worse than none.
+/// ball already at or below the surface, because a prediction nobody can act on
+/// is worse than none.
+///
+/// A ball above the surface always lands: with `dz > 0` the discriminant
+/// `vz^2 + 2 g dz` is positive however hard the ball was thrown, so there is no
+/// such thing here as escaping the plate upward.  The implementation still
+/// tests it, as an assertion rather than a case.
 ///
 /// Approximate on purpose: it ignores the plate's own motion during the
 /// flight, which is real but which the plate is about to choose.  See #23.
@@ -194,7 +198,7 @@ std::array<double, 3> stepServosOnPlate(const TableKinematics& tk,
 ///
 /// Unit weights are the textbook default, and on this plant they do not
 /// balance the ball.  The rolling model carries Coulomb resistance, so a plate
-/// tilted by less than asin(c_rr) = 0.573 deg cannot start the ball moving at
+/// tilted by less than atan(c_rr) = 0.573 deg cannot start the ball moving at
 /// all — and a state feedback with no integral term has no way out of that
 /// dead band.  It parks the ball wherever the tilt it is asking for falls
 /// inside it, which under unit weights is 37 mm off centre: a loop that looks

@@ -93,6 +93,18 @@ double normalAccel(const PlateMotion& now,
                    const Eigen::Vector2d& s_dot,
                    double gravity);
 
+/// The normal force per unit mass a plate would exert if it were holding still:
+/// gravity's share along the normal, `g (n . z)`, and nothing else.
+///
+/// This is `normalAccel` with every rate term dropped, and it exists for the
+/// one case where the rates cannot be believed.  A plate near a kinematic
+/// singularity reports velocities that are arithmetic rather than physics, and
+/// `stepBallContact` declines to act on them — but the ball is still resting on
+/// something, and its rolling resistance still has to be scaled by something.
+/// The pose is trustworthy even when the rates are not, so the tilt is the part
+/// of the answer that survives.
+double quasiStaticNormalAccel(const PlateMotion& plate, double gravity);
+
 /// Where the ball is, and whether the plate is still touching it.
 ///
 /// Two phases, two frames, and the frame is not an implementation detail.

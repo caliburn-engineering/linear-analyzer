@@ -407,7 +407,6 @@ void PlateView::step(GLFWwindow* window, float dt) {
 
     // --- Ball ---
     if (ball_enabled_ && ball_on_plate_) {
-        ball_was_airborne_ = ball_.airborne;
         ball_ = stepBallContact(ball_dynamics_, ball_, plate_motion_,
                                 plate_motion_prev_, pose_, kBallRadius,
                                 kGravity, dt);
@@ -459,7 +458,14 @@ void PlateView::stepAttract() {
     // in a single step however long the frame took in real time.  The count is
     // here to make a kick undeliverable twice, not to catch up on a backlog
     // this clock cannot accumulate.
-    if (attractKicksBy(attract_, sim_time_) > attract_kicks_done_) {
+    // And not while the ball is off the plate.  `rolling` is not the ball's
+    // state during a hop — `flight_p`/`flight_v` are — and `stepBallContact`
+    // rewrites `rolling` wholesale on landing, so a kick added here mid-hop is
+    // not a kick applied late, it is a kick silently thrown away while the
+    // counter records it as delivered.  Holding it costs a few frames and the
+    // visitor sees the nudge they were going to see.
+    if (!ball_.airborne &&
+        attractKicksBy(attract_, sim_time_) > attract_kicks_done_) {
         ball_.rolling += attractKick(attract_, attract_kicks_done_);
         ++attract_kicks_done_;
     }
@@ -706,6 +712,13 @@ void PlateView::drawBalanceControls() {
         // The lap slider's floor moves with the size, because what loses the
         // ball is the setpoint's SPEED and a fixed floor would either forbid
         // fast small paths that are safe or allow fast large ones that are not.
+        //
+        // Taken from the size just dragged, not from the one `step` last
+        // copied: the two are the same only until someone moves the slider,
+        // and the frame where they differ is exactly the frame where a
+        // just-enlarged path would keep the smaller path's floor and run at a
+        // speed this bound exists to forbid.
+        path_.radius_m = path_radius_mm_ * 1e-3;
         const float lap_min = static_cast<float>(minPeriod(path_));
         ImGui::SliderFloat("lap [s]", &path_period_s_, lap_min, 30.0f, "%.1f");
         path_period_s_ = std::max(path_period_s_, lap_min);
