@@ -208,6 +208,11 @@ if(NOT EMSCRIPTEN)
     target_include_directories(test_auto_balance PRIVATE tests)
     add_test(NAME test_auto_balance COMMAND test_auto_balance)
 
+    add_executable(test_assembly_mode tests/test_assembly_mode.cpp)
+    target_link_libraries(test_assembly_mode PRIVATE ball_dynamics)
+    target_include_directories(test_assembly_mode PRIVATE tests)
+    add_test(NAME test_assembly_mode COMMAND test_assembly_mode)
+
     add_executable(test_attract_mode tests/test_attract_mode.cpp)
     target_link_libraries(test_attract_mode PRIVATE ball_dynamics)
     target_include_directories(test_attract_mode PRIVATE tests)

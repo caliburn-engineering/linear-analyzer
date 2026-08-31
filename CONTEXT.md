@@ -223,6 +223,106 @@ The lag is integrated exactly, `alpha <- cmd + (alpha - cmd)*exp(-dt/tau)`, not
 by forward Euler: the plate runs at a fixed 60 Hz and tau defaults to 0.05 s,
 three steps per time constant, and the tau slider goes lower still.
 
+### Assembly mode
+
+Which of the two solutions of the 3-RRS constraint equations a pose is.  The
+mechanism is **built upward** — table above its knees — and there is a second,
+**folded** root with the table lying flat on the base.  For this plate the
+folded one is not an approximation or a numerical artefact: `R_ground ==
+R_table` with `L1 == L2` makes `(phi, theta, z_c) = (0, 0, 0)` satisfy every
+leg's length constraint exactly, at every servo angle.  It is a single pose,
+the same one whatever the legs are doing.
+
+A residual norm cannot tell the two apart, so **a converged forward-kinematics
+solve is not by itself an answer about a mechanism**.  `forward_kinematics` is
+a Newton solver and will return whichever root its seed is nearest;
+`solve_pose` is the one that stays on the built assembly, re-solving from the
+analytic level pose when the warm start lands on the folded one.
+
+This is why issue #22 was invisible for so long.  A hard manoeuvre carried the
+pose down through the knee plane, Newton settled on the folded root, and every
+frame after that was seeded from a pose that was *already* a root — so it
+converged in one iteration with a residual of 1e-11 and never left.  The plate
+then had no tilt authority at all and every ball put on it rolled off.  Sixty
+seconds in, and permanent.
+
+The floor separating them is a tenth of the mean knee height.  Measured over
+300k samples against assemblies verified by IK round-trip, the built population
+runs from 0.163 to 2.00 mean knee heights and the folded root sits at zero, so
+the floor clears the lowest real pose by 1.6x and the folded one by everything.
+Both ends are pinned by `tests/test_assembly_mode.cpp`.
+
+Decided in [#22](https://github.com/caliburn-engineering/caliburn/issues/22).
+
+> **Not "the FK failed" and not "a singularity".**
+> Nothing failed: the solve converged, to a real root, of the right equations.
+> And a singularity is a place where the Jacobian loses rank — this is a
+> perfectly well-conditioned second solution. Calling it either invites the fix
+> that was already there and did not work: a tighter tolerance, or a retry
+> keyed on convergence.
+
+### Workspace vs. servo box
+
+The three servo travel limits form a **box**; the set of leg triples the plate
+can actually be assembled at is not one.  Barely half the box has any assembly,
+and a *single* leg taken to either of its shipped stops with the other two at
+home already has none — the mechanism's real range about the home pose is far
+narrower than its servos'.
+
+So clamping each leg to its own travel is not enough.  A per-leg clamp can hand
+back a triple the plate cannot make, and a plate that cannot make its command
+has no pose: it freezes at whatever tilt it last held, and a frozen tilted plate
+rolls the ball off.  That was the other half of #22 — nearly two thousand frames
+of a ten-minute run.
+
+**The scatter was the folded assembly, not the controller.**  Before the fix
+the loss counts jumped about with no pattern — 0.22 m/s of kick lost the ball
+where 0.25 did not, and servo travel of ±35 degrees lost 61 balls in five
+minutes where ±45 lost none and ±60 lost 65.  That is not something a
+stabilising loop does, and it is what said the cause was discrete rather than
+dynamic: whether a particular trajectory happened to carry the pose down
+through the knee plane on some frame is a yes-or-no event, and everything
+downstream of a yes was already broken.  Travel limits and kick magnitude
+changed *which* trajectories crossed, not how much authority the loop had.
+
+With the assembly pinned, the response is monotonic in the disturbance the way
+it should always have been: at 360 swept directions the shipped tuning loses
+none at 0.35 m/s, 2 at 0.42, 14 at 0.50 and 259 at 0.60.  A curve, not a
+scatter — and one that says something true about the plant.
+
+`retreatToWorkspace` is the one answer, used at both seams: pull the target back
+toward a triple known to be assemblable until it is too.  Giving up magnitude
+and keeping direction is what saturation ought to do, and the returned point is
+always one that was actually tested, so the workspace does not have to be convex
+for it to be right.
+
+Both seams are needed, which is the part worth remembering.  `legCommand` clips
+the command against the level pose; `stepServosOnPlate` clips the *step*
+against where the legs already are.  Clipping only the command leaves the
+straight line the first-order lag travels along, and that line can leave the
+workspace even when both of its ends are inside it.  Two kick directions in
+every 360 were exactly that: one frame, mid-flight, with no assembly.
+
+The clip is not a rare corner.  Under the shipped tuning a single attract kick
+saturates the legs from every direction tested and is workspace-clipped from
+177 of 180 of them; under a deliberately aggressive tuning, from all 180.  It
+runs on essentially every disturbed frame.
+
+Decided in [#22](https://github.com/caliburn-engineering/caliburn/issues/22).
+
+> **The plate has less authority than the linear design believes.**
+> The cascade model knows about servo travel and nothing about the workspace,
+> so the gain will ask for tilts the mechanism cannot make, and against a
+> disturbance large enough it will lose the ball rather than recover it.
+>
+> There is no clean ceiling: the slivers of direction where it cannot come
+> back get narrower as the disturbance shrinks rather than stopping at a
+> threshold.  At 5760 swept directions, 0.29 m/s of ball velocity loses six,
+> 0.28 loses two, and 0.26 loses none.  Attract mode's kick sits at 0.26 for
+> that reason, and nobody has proved there is not a narrower sliver still.
+> Designing a gain that respects the workspace is not done, and is the thing
+> that would replace this argument with a guarantee.
+
 ### Attract mode
 
 The application driving itself for a visitor who has not arrived yet: the
@@ -247,9 +347,11 @@ Three decisions carry it:
   anywhere.  Every acceptance criterion is a claim about what a visitor sees,
   and a schedule that differed run to run could only be checked by watching it.
   Written this way, `tests/test_attract_mode.cpp` runs the whole minute against
-  the nonlinear plate: the kick throws the ball 43-85 mm out, the loop has it
-  back inside 10 mm before the next one, and it never leaves the plate — worst
-  excursion in a minute is 85 mm against the 280 mm the plate has.
+  the nonlinear plate: the kick throws the ball 24-30 mm out, the loop has it
+  back inside 10 mm before the next one, and it never leaves the plate — over
+  ten minutes, and from all 720 directions swept rather than the fifteen the
+  schedule happens to reach in a minute.  That last distinction is #22: the
+  one-minute check passed while the demo was broken.
 - **The clock is the simulation's, not the wall's.**  The plate advances by a
   fixed 1/60 per frame, so a device that cannot hold 60 fps plays the whole
   demo slow.  Pacing the kicks by a wall clock would then drop the next one
@@ -258,6 +360,9 @@ Three decisions carry it:
   and the first kick is pulled in to 2.5 s so that "late" still lands inside
   the ten seconds a stranger gives the page.  Kicks are counted rather than
   triggered on an interval, which is what makes one undeliverable twice.
+- **The kick is sized to what the loop can actually reject**, 0.26 m/s, not to
+  what looks dramatic.  See *Workspace vs. servo box*: the demo has no business
+  delivering a disturbance the controller loses the ball to.
 
 `setDesign` is where the loop first closes, and it has to be: on the opening
 frame the LQR solve has not run, so a `balance_engaged_` set true in the

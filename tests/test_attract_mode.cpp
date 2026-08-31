@@ -136,7 +136,7 @@ struct DemoRun {
 };
 
 // PlateView::step's calls, in PlateView::step's order: legCommand ->
-// stepServos -> forward_kinematics -> attract kick -> stepBall.  The kick
+// stepServosOnPlate -> solve_pose -> attract kick -> stepBall.  The kick
 // lands after the controller has read the ball, which is the causal order a
 // disturbance actually has — the loop sees it on the next frame, not the one
 // it happened on.
@@ -166,11 +166,11 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
     double t = 0.0;
     r.trace.push_back({0.0, std::hypot(ball(0), ball(1))});
     for (int k = 0; k < steps; ++k) {
-        const LegCommand c = legCommand(d, alpha, ball, 0.0, 0.0);
+        const LegCommand c = legCommand(tk, d, alpha, ball, 0.0, 0.0);
         t += dt;
-        alpha = stepServos(alpha, c.alpha_rad, d.servo_tau, dt);
+        alpha = stepServosOnPlate(tk, alpha, c.alpha_rad, d.servo_tau, dt);
 
-        const FKResult fk = tk.forward_kinematics(alpha, pose);
+        const FKResult fk = tk.solve_pose(alpha, pose);
         if (fk.converged) pose = fk.pose;
 
         for (const int due = attractKicksBy(s, t); r.kicks < due; ++r.kicks)
@@ -235,9 +235,15 @@ void test_the_opening_displacement_is_recovered_before_the_first_kick() {
 }
 
 // "A disturbance is visible, and recovery from it is visible."  Every kick in
-// a minute of running, individually: it throws the ball at least 40 mm out —
-// measured 43 to 85 mm, a sixth of the plate at worst and unmissable in the
-// 3D view — and the ball is home again before the next one arrives.
+// a minute of running, individually: it throws the ball at least 18 mm out —
+// measured 24 to 30 mm — and the ball is home again before the next one
+// arrives.
+//
+// The bar came down with the kick when #22 showed the old magnitude was
+// outside what this loop can actually reject.  30 mm is a tenth of the plate's
+// radius, which is plainly visible motion on a canvas a few hundred pixels
+// wide — and, unlike the 85 mm this used to claim, it is a disturbance the
+// controller survives from every direction rather than from most of them.
 void test_every_kick_is_visible_and_recovered_before_the_next() {
     const auto models = getBuiltinModels();
     const auto& e = cascadeModel(models);
@@ -250,7 +256,7 @@ void test_every_kick_is_visible_and_recovered_before_the_next() {
     for (int n = 0; n < r.kicks; ++n) {
         const double t_kick = s.first_kick_s + n * s.period_s;
         const double t_next = t_kick + s.period_s;
-        ASSERT_TRUE(peakBetween(r, t_kick, t_next) > 0.04);
+        ASSERT_TRUE(peakBetween(r, t_kick, t_next) > 0.018);
         ASSERT_TRUE(radiusAt(r, t_next - 0.1) < kHome);
     }
 }
@@ -269,6 +275,121 @@ void test_a_minute_unattended_never_loses_the_ball() {
     ASSERT_TRUE(peakBetween(r, 0.0, 60.0) < 0.5 * (tp.R_table - kBallRadius));
 }
 
+// Issue #22, as the two checks that would have caught it.
+//
+// The old one-minute run passed while the demo was broken, because it saw
+// only the fifteen directions the golden angle happens to produce in sixty
+// seconds and the first failure was at 59.3 s.  These sweep the disturbance
+// instead of sampling it, and run long enough for a permanent failure to have
+// somewhere to show itself.
+
+// One kick, swept over every direction, from the state the schedule actually
+// kicks from — the loop settled, the ball parked a few millimetres off centre
+// in the friction dead band, the legs slightly off home.  Kicking a pristine
+// plate at exact centre would be an easier test than the thing it stands in
+// for: #22's real failure had the ball at +3.4, -3.3 mm with the legs already
+// displaced.
+double sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
+                         const AttractSchedule& s, double theta) {
+    const TableParams tp = cascadeMechanism(e.params);
+    const TableKinematics tk(tp);
+    AutoBalanceDesign d;
+    d.K = K;
+    d.home_leg_rad = cascadeHomeLegAngle(e.params);
+    d.servo_tau = cascadeServoTau(e.params);
+    d.alpha_min_rad = tp.alpha_min;
+    d.alpha_max_rad = tp.alpha_max;
+    const RollingBallDynamics dynamics(
+        kPlateBall, PlateParams{tp.R_table, cascadeGravity(e.params)});
+
+    std::array<double, 3> alpha = {d.home_leg_rad, d.home_leg_rad, d.home_leg_rad};
+    TablePose pose = tk.home_pose(d.home_leg_rad);
+    Eigen::Vector4d ball = attractStart(s);
+
+    const double dt = 1.0 / 60.0;
+    double peak = 0.0;
+    // Settle out of the opening displacement first, exactly as the demo does,
+    // then kick from wherever that left everything.
+    const int settle = static_cast<int>(s.first_kick_s / dt);
+    const int total = settle + static_cast<int>(12.0 / dt);
+    for (int k = 0; k < total; ++k) {
+        if (k == settle) {
+            ball(2) += s.speed * std::cos(theta);
+            ball(3) += s.speed * std::sin(theta);
+        }
+        const LegCommand c = legCommand(tk, d, alpha, ball, 0.0, 0.0);
+        alpha = stepServosOnPlate(tk, alpha, c.alpha_rad, d.servo_tau, dt);
+        const FKResult fk = tk.solve_pose(alpha, pose);
+        // The plate always has an assembly now.  A stronger statement than
+        // "the ball stayed on", and the one the fix actually makes.
+        ASSERT_TRUE(fk.converged);
+        pose = fk.pose;
+        ball = stepBall(dynamics, ball, pose, dt);
+        if (k >= settle) peak = std::max(peak, std::hypot(ball(0), ball(1)));
+        ASSERT_TRUE(ballOnPlate(ball, tp.R_table, kBallRadius));
+    }
+    ASSERT_TRUE(std::hypot(ball(0), ball(1)) < kHome);   // and came home
+    return peak;
+}
+
+// Every direction, not the handful the schedule reaches.  A kick the loop
+// cannot reject is a kick the demo must not deliver, wherever it points.
+void test_the_kick_is_rejected_from_every_direction() {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+    const Eigen::MatrixXd K = defaultGain(e);
+
+    double worst_peak = 0.0;
+    for (int i = 0; i < 720; ++i)
+        worst_peak = std::max(worst_peak,
+                              sweepOneDirection(e, K, AttractSchedule{},
+                                                i * M_PI / 360.0));
+
+    // Visible, and nowhere near the edge: 30 mm against the 280 mm the plate
+    // has.  Measured; the assertion is loose around it on purpose.
+    ASSERT_TRUE(worst_peak > 0.018);
+    ASSERT_TRUE(worst_peak < 0.06);
+}
+
+// "A tuning that genuinely saturates the legs still recovers."
+//
+// Q on ball position at 2000 against unit input weights is far past anything
+// the preset work in #19 proposes.  It saturates the legs from every direction
+// tested and is workspace-clipped from every one of them — measured, all 180 —
+// and still brings the ball back, in 0.35 s, without the plate ever being left
+// without an assembly.  That is the retreat doing its job under the worst
+// tuning the design surface can produce, rather than under the shipped one.
+void test_a_saturating_tuning_still_recovers() {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+
+    Eigen::VectorXd q(7);
+    q << 1, 1, 1, 2000, 2000, 2, 2;
+    const Eigen::MatrixXd K = gainFor(e, q, defaultLqrInputWeights(3));
+
+    for (int i = 0; i < 180; ++i)
+        sweepOneDirection(e, K, AttractSchedule{}, i * M_PI / 90.0);
+}
+
+// Ten minutes unattended.  The failure this pins is the one that shipped: the
+// ball left at 59.3 s and then left on every kick after it, for as long as the
+// page stayed open, because the plate had folded onto an assembly it could
+// never climb out of.
+void test_ten_minutes_unattended_never_loses_the_ball() {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+
+    const DemoRun r = runDemo(e, defaultGain(e), AttractSchedule{}, 600.0);
+    ASSERT_TRUE(!r.left_plate);
+    ASSERT_TRUE(r.kicks >= 140);
+
+    const TableParams tp = cascadeMechanism(e.params);
+    ASSERT_TRUE(peakBetween(r, 0.0, 600.0) < 0.5 * (tp.R_table - kBallRadius));
+
+    // Still balancing at the end, not merely still on the plate.
+    ASSERT_TRUE(radiusAt(r, 600.0) < kHome);
+}
+
 }  // namespace
 
 int main() {
@@ -280,6 +401,9 @@ int main() {
     test_the_opening_displacement_is_recovered_before_the_first_kick();
     test_every_kick_is_visible_and_recovered_before_the_next();
     test_a_minute_unattended_never_loses_the_ball();
+    test_the_kick_is_rejected_from_every_direction();
+    test_a_saturating_tuning_still_recovers();
+    test_ten_minutes_unattended_never_loses_the_ball();
     std::printf("test_attract_mode: all passed\n");
     return 0;
 }

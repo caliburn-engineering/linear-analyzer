@@ -69,6 +69,12 @@ Eigen::VectorXd cascadeState(const std::array<double, 3>& alpha_rad,
 struct LegCommand {
     std::array<double, 3> alpha_rad;
     bool saturated;  ///< at least one leg hit its travel limit
+
+    /// The command asked for a pose the mechanism cannot assemble, and was
+    /// scaled back until it could.  Distinct from `saturated`: a triple can be
+    /// inside every servo's travel and still not exist, because the travel
+    /// limits are a box and the workspace is not.
+    bool clipped_to_workspace;
 };
 
 /// The loop, evaluated once: u = -K(x - x_ref), commanded as `home + u`.
@@ -82,11 +88,58 @@ struct LegCommand {
 /// A gain of the wrong shape returns the home pose and no saturation, so a
 /// caller that forgets to check `gainFitsCascade` gets a flat plate rather
 /// than an out-of-bounds read.
-LegCommand legCommand(const AutoBalanceDesign& d,
+///
+/// `tk` is here because clamping each leg to its own travel is not enough.
+/// Barely half of the servo box has an assembly at all, so a per-leg clamp can
+/// hand back a triple the plate cannot make — and a plate that cannot make its
+/// command has no pose, so it freezes at whatever tilt it last held and rolls
+/// the ball off.  That was the second half of issue #22.
+///
+/// The command is scaled back toward the home pose until it is assemblable,
+/// which gives up magnitude and keeps direction — what saturation ought to do.
+/// The level pose always assembles, so the search always has an answer.
+LegCommand legCommand(const TableKinematics& tk,
+                      const AutoBalanceDesign& d,
                       const std::array<double, 3>& alpha_rad,
                       const Eigen::Vector4d& ball,
                       double x_sp,
                       double y_sp);
+
+/// Pull `target` back toward `safe` until the mechanism can be assembled there.
+///
+/// The servo travel limits are a box and the workspace is not — barely half
+/// the box has an assembly at all, and it is under no obligation to be convex.
+/// So both a command and a servo step can land outside it, and a leg triple
+/// with no assembly gives the plate no pose: it freezes at whatever tilt it
+/// last held, and a frozen tilted plate rolls the ball off.  That was issue
+/// #22's second half.
+///
+/// `safe` must itself be assemblable, and every caller has one to hand: the
+/// home pose for a command, the legs' present position for a step.  The legs
+/// start at home and are never moved anywhere unassemblable, so that second
+/// one holds by induction.
+///
+/// Scaling gives up magnitude and keeps direction, which is what saturation
+/// ought to do.  Bisection, but the answer does not depend on the workspace
+/// being convex along the ray: the returned point is one that was actually
+/// tested, never an interpolated boundary.
+struct Retreat {
+    std::array<double, 3> alpha_rad;
+    bool retreated;  ///< the target had no assembly and was pulled back
+
+    /// `safe` did not assemble either, so there was nothing to retreat TO and
+    /// `alpha_rad` is just `safe` handed back.  The precondition is broken and
+    /// the plate is about to freeze; this is the flag that says so rather than
+    /// letting it look like an ordinary clip.  It cannot happen through the
+    /// two call sites here — the level pose always assembles, and the legs are
+    /// never moved anywhere that does not — but "cannot happen" is worth one
+    /// bool when the alternative is a silent stall.
+    bool safe_was_unassemblable;
+};
+
+Retreat retreatToWorkspace(const TableKinematics& tk,
+                           const std::array<double, 3>& target,
+                           const std::array<double, 3>& safe);
 
 /// Advance the three first-order servos one step, integrated exactly:
 ///
@@ -100,6 +153,23 @@ std::array<double, 3> stepServos(const std::array<double, 3>& alpha_rad,
                                  const std::array<double, 3>& cmd_rad,
                                  double tau,
                                  double dt);
+
+/// The same step, stopped at the workspace boundary.
+///
+/// `stepServos` lags each leg independently, so its result sits on the
+/// straight line from where the legs are to where they were told to go — and
+/// that line can leave the workspace even when both of its ends are inside.
+/// Clipping the COMMAND is therefore not enough, which is what the last two
+/// failing kick directions turned out to be: one frame, mid-flight, with no
+/// assembly.
+///
+/// The legs stop where the mechanism stops them, which is what a real one
+/// does when it is driven into a bind.
+std::array<double, 3> stepServosOnPlate(const TableKinematics& tk,
+                                        const std::array<double, 3>& alpha_rad,
+                                        const std::array<double, 3>& cmd_rad,
+                                        double tau,
+                                        double dt);
 
 /// The weights the LQR designer opens on.
 ///

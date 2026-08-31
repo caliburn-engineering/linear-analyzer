@@ -224,6 +224,7 @@ void PlateView::resetAll() {
     animate_ = false;
     balance_engaged_ = false;
     balance_saturated_ = false;
+    balance_clipped_ = false;
     sp_x_mm_ = 0.0f;
     sp_y_mm_ = 0.0f;
     anim_time_ = 0.0f;
@@ -272,13 +273,15 @@ void PlateView::step(GLFWwindow* window, float dt) {
     const std::array<double, 3> alpha_rad = legsRad();
 
     if (loopDriving()) {
-        const LegCommand c = legCommand(design_, alpha_rad, ball_state_,
+        const LegCommand c = legCommand(tk_, design_, alpha_rad, ball_state_,
                                         sp_x_mm_ * 1e-3, sp_y_mm_ * 1e-3);
         balance_saturated_ = c.saturated;
+        balance_clipped_ = c.clipped_to_workspace;
         for (int i = 0; i < 3; ++i)
             alpha_cmd_deg_[i] = static_cast<float>(c.alpha_rad[i] / kDeg);
     } else if (animate_) {
         balance_saturated_ = false;
+        balance_clipped_ = false;
         anim_time_ += dt * anim_speed_;
         const float amp = anim_amplitude_;
         const float w = 2.0f * static_cast<float>(M_PI) * 0.5f * anim_time_;
@@ -287,6 +290,7 @@ void PlateView::step(GLFWwindow* window, float dt) {
         alpha_cmd_deg_[2] = 45.0f + amp * std::sin(w + 4.0f * static_cast<float>(M_PI) / 3.0f);
     } else {
         balance_saturated_ = false;
+        balance_clipped_ = false;
     }
     sim_time_ += dt;
 
@@ -294,25 +298,32 @@ void PlateView::step(GLFWwindow* window, float dt) {
     const std::array<double, 3> cmd_rad = {
         alpha_cmd_deg_[0] * kDeg, alpha_cmd_deg_[1] * kDeg, alpha_cmd_deg_[2] * kDeg};
     const std::array<double, 3> next =
-        stepServos(alpha_rad, cmd_rad, design_.servo_tau, dt);
+        stepServosOnPlate(tk_, alpha_rad, cmd_rad, design_.servo_tau, dt);
     for (int i = 0; i < 3; ++i)
         alpha_deg_[i] = static_cast<float>(next[i] / kDeg);
 
     // --- Kinematics ---
     const std::array<double, 3> alpha_now = legsRad();
 
-    fk_result_ = tk_.forward_kinematics(alpha_now, home_);
-    if (!fk_result_.converged || fk_result_.residual_norm > 1e-6) {
-        const TablePose analytic = tk_.home_pose(
-            (alpha_now[0] + alpha_now[1] + alpha_now[2]) / 3.0);
-        const FKResult retry = tk_.forward_kinematics(alpha_now, analytic);
-        if (retry.converged && retry.residual_norm < fk_result_.residual_norm)
-            fk_result_ = retry;
+    // `solve_pose`, not `forward_kinematics`: the constraint equations have a
+    // second root with the table folded flat on the base, and the retry this
+    // used to do tested only convergence — which the folded root passes, with
+    // a residual of 1e-11, in one iteration.  Once the pose fell onto it the
+    // next frame was seeded from it and the plate stayed flat for the rest of
+    // the session.  See issue #22.
+    fk_result_ = tk_.solve_pose(alpha_now, home_);
+
+    // The pose is adopted only on success.  Before, it was assigned whatever
+    // the solver last held even when that solve had failed — so a leg triple
+    // with no assembly at all still moved the plate, using a pose that solved
+    // nothing.  Keeping the previous one is what a mechanism does when it is
+    // driven into a singularity: it binds and stops.
+    if (fk_result_.converged) {
+        pose_ = fk_result_.pose;
+        home_ = fk_result_.pose;
     }
-    pose_ = fk_result_.pose;
     condition_num_ = tk_.condition_number(alpha_now, pose_);
     manipulability_ = tk_.manipulability(alpha_now, pose_);
-    if (fk_result_.converged) home_ = pose_;
 
     // --- Attract mode ---
     // After the controller has read the ball and before the ball is
@@ -575,6 +586,15 @@ void PlateView::drawBalanceControls() {
     const double err = std::hypot(ball_state_(0) - sp_x_mm_ * 1e-3,
                                   ball_state_(1) - sp_y_mm_ * 1e-3);
     ImGui::Text("error: %6.1f mm", err * 1000.0);
+
+    if (balance_clipped_) {
+        // A different thing from saturation, and worth its own line: the legs
+        // are inside their travel and the controller is still not getting what
+        // it asked for, because the pose it wants is not one this mechanism
+        // has.  See CONTEXT.md, "Workspace vs. servo box".
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                           "command clipped to the plate's workspace");
+    }
 
     if (balance_saturated_) {
         // Not a failure — the legs really do stop at 10 and 80 degrees.  But a

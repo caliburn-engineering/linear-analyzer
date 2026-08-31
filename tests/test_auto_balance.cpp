@@ -114,7 +114,7 @@ void test_zero_error_commands_the_home_pose() {
     const std::array<double, 3> alpha = {kHome, kHome, kHome};
     const Eigen::Vector4d ball(0.07, -0.02, 0.0, 0.0);
 
-    const LegCommand c = legCommand(d, alpha, ball, 0.07, -0.02);
+    const LegCommand c = legCommand(cascadeKinematics(), d, alpha, ball, 0.07, -0.02);
     for (int i = 0; i < 3; ++i) ASSERT_NEAR(c.alpha_rad[i], kHome, 1e-12);
     ASSERT_TRUE(!c.saturated);
 }
@@ -129,7 +129,7 @@ void test_command_is_home_minus_k_error() {
     const std::array<double, 3> alpha = {kHome + 0.04, kHome, kHome};
     const Eigen::Vector4d ball(0.01, 0.02, 0.0, 0.0);
 
-    const LegCommand c = legCommand(d, alpha, ball, 0.0, 0.0);
+    const LegCommand c = legCommand(cascadeKinematics(), d, alpha, ball, 0.0, 0.0);
     ASSERT_NEAR(c.alpha_rad[0], kHome - 2.0 * 0.01, 1e-12);
     ASSERT_NEAR(c.alpha_rad[1], kHome + 3.0 * 0.02, 1e-12);
     ASSERT_NEAR(c.alpha_rad[2], kHome - 0.5 * 0.04, 1e-12);
@@ -144,31 +144,78 @@ void test_setpoint_moves_the_target() {
     const AutoBalanceDesign d = designWith(K);
     const std::array<double, 3> alpha = {kHome, kHome, kHome};
 
-    const LegCommand at = legCommand(d, alpha, Eigen::Vector4d(0.05, 0, 0, 0), 0.05, 0.0);
+    const LegCommand at = legCommand(cascadeKinematics(), d, alpha,
+                                     Eigen::Vector4d(0.05, 0, 0, 0), 0.05, 0.0);
     ASSERT_NEAR(at.alpha_rad[0], kHome, 1e-12);
 
-    const LegCommand off = legCommand(d, alpha, Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
+    const LegCommand off = legCommand(cascadeKinematics(), d, alpha,
+                                      Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
     ASSERT_NEAR(off.alpha_rad[0], kHome - 0.05, 1e-12);
 }
 
-void test_command_clamps_to_servo_travel() {
+// Travel limits clamp; the workspace then clips.  Two stages, because they
+// are two different constraints: a leg has a stop, and a triple of legs has to
+// describe a plate that exists.  Since #22 the second one is enforced too, so
+// a command driven at both stops does not come back sitting on them.
+void test_command_clamps_to_servo_travel_then_to_the_workspace() {
     Eigen::MatrixXd K = Eigen::MatrixXd::Zero(3, 7);
     K(0, 3) = 1e4;
     K(1, 3) = -1e4;
     const AutoBalanceDesign d = designWith(K);
     const std::array<double, 3> alpha = {kHome, kHome, kHome};
 
-    const LegCommand c = legCommand(d, alpha, Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
-    ASSERT_NEAR(c.alpha_rad[0], d.alpha_min_rad, 1e-12);
-    ASSERT_NEAR(c.alpha_rad[1], d.alpha_max_rad, 1e-12);
-    ASSERT_NEAR(c.alpha_rad[2], kHome, 1e-12);
+    const LegCommand c = legCommand(cascadeKinematics(), d, alpha,
+                                    Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
     ASSERT_TRUE(c.saturated);
+    ASSERT_TRUE(c.clipped_to_workspace);
+
+    // Both stops asked for a 70 degree spread, which no assembly of this
+    // mechanism has.  What comes back is inside the travel rather than on it.
+    ASSERT_TRUE(c.alpha_rad[0] > d.alpha_min_rad);
+    ASSERT_TRUE(c.alpha_rad[1] < d.alpha_max_rad);
+
+    // Direction survives: leg 0 still driven down, leg 1 up, leg 2 untouched.
+    ASSERT_TRUE(c.alpha_rad[0] < kHome);
+    ASSERT_TRUE(c.alpha_rad[1] > kHome);
+    ASSERT_NEAR(c.alpha_rad[2], kHome, 1e-12);
+
+    // And the plate can be built at what it asked for.
+    const TableKinematics& tk = cascadeKinematics();
+    const double mean = (c.alpha_rad[0] + c.alpha_rad[1] + c.alpha_rad[2]) / 3.0;
+    ASSERT_TRUE(tk.solve_pose(c.alpha_rad, tk.home_pose(mean)).converged);
+}
+
+// The clamp on its own, where the clamped triple IS assemblable: the limit is
+// still a hard stop, and nothing gets scaled back for no reason.
+//
+// The travel has to be narrowed for this case to exist at all, which is worth
+// knowing on its own.  The shipped limits are 10 and 80 degrees, and a SINGLE
+// leg taken to either of them with the other two at home already has no
+// assembly — the mechanism's real range about the home pose is far narrower
+// than its servos'.  That is why the workspace clip is doing work on almost
+// every saturated frame rather than in a rare corner.
+void test_a_reachable_clamp_is_left_on_the_stop() {
+    Eigen::MatrixXd K = Eigen::MatrixXd::Zero(3, 7);
+    K(0, 3) = 1e4;                       // one leg only, driven to its stop
+    AutoBalanceDesign d = designWith(K);
+    d.alpha_min_rad = 40.0 * kDeg;
+    d.alpha_max_rad = 50.0 * kDeg;
+    const std::array<double, 3> alpha = {kHome, kHome, kHome};
+
+    const LegCommand c = legCommand(cascadeKinematics(), d, alpha,
+                                    Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
+    ASSERT_TRUE(c.saturated);
+    ASSERT_TRUE(!c.clipped_to_workspace);
+    ASSERT_NEAR(c.alpha_rad[0], d.alpha_min_rad, 1e-12);
+    ASSERT_NEAR(c.alpha_rad[1], kHome, 1e-12);
+    ASSERT_NEAR(c.alpha_rad[2], kHome, 1e-12);
 }
 
 void test_wrong_shape_commands_the_home_pose() {
     const AutoBalanceDesign d = designWith(Eigen::MatrixXd::Ones(2, 3));
     const std::array<double, 3> alpha = {kHome + 0.2, kHome, kHome};
-    const LegCommand c = legCommand(d, alpha, Eigen::Vector4d(0.1, 0.1, 1, 1), 0, 0);
+    const LegCommand c = legCommand(cascadeKinematics(), d, alpha,
+                                    Eigen::Vector4d(0.1, 0.1, 1, 1), 0, 0);
     for (int i = 0; i < 3; ++i) ASSERT_NEAR(c.alpha_rad[i], kHome, 1e-12);
     ASSERT_TRUE(!c.saturated);
 }
@@ -212,7 +259,7 @@ struct SimResult {
 };
 
 // The same four calls, in the same order, that PlateView::step makes:
-// legCommand -> stepServos -> forward_kinematics -> stepBall.  Nothing here is
+// legCommand -> stepServosOnPlate -> solve_pose -> stepBall.  Nothing here is
 // linearised, and nothing here knows what Q and R were.
 SimResult runClosedLoop(const ModelEntry& e,
                         const Eigen::MatrixXd& K,
@@ -242,10 +289,10 @@ SimResult runClosedLoop(const ModelEntry& e,
 
     SimResult r{0.0, 0.0, -1.0, 0.0, false};
     for (int k = 0; k < steps; ++k) {
-        const LegCommand c = legCommand(d, alpha, ball, x_sp, y_sp);
-        alpha = stepServos(alpha, c.alpha_rad, d.servo_tau, dt);
+        const LegCommand c = legCommand(tk, d, alpha, ball, x_sp, y_sp);
+        alpha = stepServosOnPlate(tk, alpha, c.alpha_rad, d.servo_tau, dt);
 
-        const FKResult fk = tk.forward_kinematics(alpha, pose);
+        const FKResult fk = tk.solve_pose(alpha, pose);
         if (fk.converged) pose = fk.pose;
 
         ball = stepBall(dynamics, ball, pose, dt);
@@ -405,7 +452,8 @@ int main() {
     test_zero_error_commands_the_home_pose();
     test_command_is_home_minus_k_error();
     test_setpoint_moves_the_target();
-    test_command_clamps_to_servo_travel();
+    test_command_clamps_to_servo_travel_then_to_the_workspace();
+    test_a_reachable_clamp_is_left_on_the_stop();
     test_wrong_shape_commands_the_home_pose();
     test_servo_lag_is_first_order();
     test_default_weights_balance_the_ball();

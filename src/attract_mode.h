@@ -55,12 +55,32 @@ struct AttractSchedule {
     double first_kick_s = 2.5;
     double period_s = 4.0;
 
-    /// Kick magnitude, as a velocity impulse.  Chosen at the magnitude of the
-    /// nudge `test_default_weights_reject_a_nudge` already runs — 0.43 m/s —
-    /// and measured here at 43 to 85 mm of excursion depending on direction,
-    /// against a plate of 300 mm radius.  Unmissable in the 3D view, and
-    /// nowhere near the edge.
-    double speed = 0.42;  ///< [m/s]
+    /// Kick magnitude, as a velocity impulse.
+    ///
+    /// This was 0.42 m/s, chosen to match a nudge the tests already ran — and
+    /// `test_default_weights_reject_a_nudge` still runs it, still settles, and
+    /// is right to: 0.42 is rejected from nearly every direction.  The problem
+    /// is the word nearly.  Above roughly 0.29 m/s there are narrow slivers of
+    /// direction, a few in every thousand, where the gain saturates against
+    /// the workspace and cannot bring the ball back, and a demo that kicks
+    /// every four seconds for as long as the tab is open will find one.
+    ///
+    /// Issue #22 is the story of why nobody saw them: the plate's forward
+    /// kinematics could fall onto a folded assembly that does not exist, and a
+    /// plate free to reach impossible poses looks like one with more control
+    /// authority than it has.  The slivers were there all along, hidden under
+    /// a much louder failure.
+    ///
+    /// 0.26 m/s, then, with a worst excursion of 27 mm on a plate of 300 mm
+    /// radius.  Smaller than the demo used to claim, and honest about what it
+    /// is: the slivers thin as the kick shrinks rather than disappearing at
+    /// some threshold — 0.28 loses 2 directions in 5760, 0.29 loses 6, and
+    /// 0.26 loses none at that resolution.  Nobody has proved there is not a
+    /// narrower one still.  What IS held: no loss over 720 swept directions
+    /// and none in ten minutes of the schedule, both in `test_attract_mode`.
+    /// And auto-reset means a sliver, if one were ever hit, is a blink rather
+    /// than the permanent failure #22 actually was.
+    double speed = 0.26;  ///< [m/s]
 
     /// The advance in direction from one kick to the next: the golden angle,
     /// so successive kicks point somewhere new for a very long time.  A demo

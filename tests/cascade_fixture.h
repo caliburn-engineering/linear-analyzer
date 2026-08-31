@@ -17,7 +17,9 @@
 #include "analysis/lqr.h"
 #include "analysis/model_library.h"
 #include "auto_balance.h"
+#include "ball_sim.h"
 #include "rolling_dynamics.h"
+#include "table_kinematics.h"
 #include "test_helpers.h"
 
 #include <Eigen/Core>
@@ -38,6 +40,15 @@ inline const ModelEntry& cascadeModel(const std::vector<ModelEntry>& models) {
         if (isCascadeModel(m)) return m;
     std::fprintf(stderr, "FAIL: no cascade model in the library\n");
     std::exit(1);
+}
+
+/// The plate itself.  `legCommand` needs it because the servo travel limits
+/// are a box and the workspace is not — see issue #22 — so every test that
+/// evaluates the loop needs a mechanism to check the command against.
+inline const TableKinematics& cascadeKinematics() {
+    static const TableKinematics tk(
+        cascadeMechanism(cascadeModel(getBuiltinModels()).params));
+    return tk;
 }
 
 inline Eigen::MatrixXd gainFor(const ModelEntry& e,

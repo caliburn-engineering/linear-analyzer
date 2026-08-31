@@ -340,6 +340,48 @@ FKResult TableKinematics::forward_kinematics(const std::array<double, 3>& alpha,
     return result;
 }
 
+TablePose TableKinematics::level_pose(const std::array<double, 3>& alpha) const {
+    return home_pose((alpha[0] + alpha[1] + alpha[2]) / 3.0);
+}
+
+bool TableKinematics::can_assemble(const std::array<double, 3>& alpha) const {
+    // Seeded from the level pose, which is the built assembly by
+    // construction — `solve_pose` would fall back to it anyway, so passing it
+    // in costs nothing and saves the warm solve that would only be discarded.
+    return solve_pose(alpha, level_pose(alpha)).converged;
+}
+
+double TableKinematics::assembly_floor(const std::array<double, 3>& alpha) const {
+    const double mean_knee_z = params_.L1 *
+        (std::sin(alpha[0]) + std::sin(alpha[1]) + std::sin(alpha[2])) / 3.0;
+    return 0.1 * mean_knee_z;
+}
+
+FKResult TableKinematics::solve_pose(const std::array<double, 3>& alpha,
+                                     const TablePose& seed) const {
+    const double floor_z = assembly_floor(alpha);
+    // `forward_kinematics` has its own tolerance; this is the caller-facing
+    // one the plate has always used, and it is the looser of the two.
+    auto built = [&](const FKResult& r) {
+        return r.converged && r.residual_norm < 1e-6 && r.pose.z_c > floor_z;
+    };
+
+    const FKResult warm = forward_kinematics(alpha, seed);
+    if (built(warm)) return warm;
+
+    // The analytic level pose takes the positive square root, so it is on the
+    // built assembly whatever the seed had wandered onto.
+    const FKResult cold = forward_kinematics(alpha, level_pose(alpha));
+    if (built(cold)) return cold;
+
+    // Neither root is a built assembly: this triple has none.  Report the
+    // better-conditioned attempt so a caller that wants to show a residual
+    // has one, but never as a success.
+    FKResult none = (cold.residual_norm < warm.residual_norm) ? cold : warm;
+    none.converged = false;
+    return none;
+}
+
 // ============================================================================
 // Velocity Jacobian
 // ============================================================================

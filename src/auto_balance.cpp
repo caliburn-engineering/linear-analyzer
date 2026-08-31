@@ -41,12 +41,52 @@ Eigen::VectorXd cascadeState(const std::array<double, 3>& alpha_rad,
     return x;
 }
 
-LegCommand legCommand(const AutoBalanceDesign& d,
+namespace {
+
+/// `s` of the way from `from` toward `to`.
+std::array<double, 3> lerp(const std::array<double, 3>& from,
+                           const std::array<double, 3>& to, double s) {
+    return {from[0] + s * (to[0] - from[0]),
+            from[1] + s * (to[1] - from[1]),
+            from[2] + s * (to[2] - from[2])};
+}
+
+}  // namespace
+
+Retreat retreatToWorkspace(const TableKinematics& tk,
+                           const std::array<double, 3>& target,
+                           const std::array<double, 3>& safe) {
+    if (tk.can_assemble(target)) return {target, false, false};
+
+    // Twelve bisections, because the whole servo travel is 70 degrees and
+    // 70 / 2^12 is a hundredth of a degree — below what the plate's own 0.1
+    // degree readout can show, and far below what a frame of servo lag moves.
+    // Each one costs a forward solve, but only on frames that are already
+    // saturated hard enough to be asking for a pose that does not exist.
+    //
+    // `lo` is only ever set to a scale that was TESTED assemblable, so what
+    // comes back is valid whether or not the workspace is convex along this
+    // ray.  `lo = 0` is `safe`, which the contract says already is.
+    double lo = 0.0, hi = 1.0;
+    for (int i = 0; i < 12; ++i) {
+        const double mid = 0.5 * (lo + hi);
+        if (tk.can_assemble(lerp(safe, target, mid))) lo = mid;
+        else hi = mid;
+    }
+    // `lo` never moved: every scale tested failed, which can only mean `safe`
+    // itself has no assembly.  Say so rather than returning it as though it
+    // were a normal clip.
+    if (lo == 0.0 && !tk.can_assemble(safe)) return {safe, true, true};
+    return {lerp(safe, target, lo), true, false};
+}
+
+LegCommand legCommand(const TableKinematics& tk,
+                      const AutoBalanceDesign& d,
                       const std::array<double, 3>& alpha_rad,
                       const Eigen::Vector4d& ball,
                       double x_sp,
                       double y_sp) {
-    LegCommand out{{d.home_leg_rad, d.home_leg_rad, d.home_leg_rad}, false};
+    LegCommand out{{d.home_leg_rad, d.home_leg_rad, d.home_leg_rad}, false, false};
     if (!gainFitsCascade(d)) return out;
 
     Eigen::VectorXd x_ref = Eigen::VectorXd::Zero(kStates);
@@ -62,6 +102,14 @@ LegCommand legCommand(const AutoBalanceDesign& d,
         if (clamped != raw) out.saturated = true;
         out.alpha_rad[i] = clamped;
     }
+
+    // The travel limits are a box; the workspace is not.  The level pose is
+    // the safe end here — always assemblable, whatever the gain asked for.
+    const std::array<double, 3> level = {d.home_leg_rad, d.home_leg_rad,
+                                         d.home_leg_rad};
+    const Retreat r = retreatToWorkspace(tk, out.alpha_rad, level);
+    out.alpha_rad = r.alpha_rad;
+    out.clipped_to_workspace = r.retreated;
     return out;
 }
 
@@ -77,6 +125,17 @@ std::array<double, 3> stepServos(const std::array<double, 3>& alpha_rad,
     for (int i = 0; i < 3; ++i)
         next[i] = cmd_rad[i] + (alpha_rad[i] - cmd_rad[i]) * decay;
     return next;
+}
+
+std::array<double, 3> stepServosOnPlate(const TableKinematics& tk,
+                                        const std::array<double, 3>& alpha_rad,
+                                        const std::array<double, 3>& cmd_rad,
+                                        double tau,
+                                        double dt) {
+    // Where the legs ARE is the safe end: they started at home and have never
+    // been moved anywhere without an assembly, so it holds by induction.
+    return retreatToWorkspace(tk, stepServos(alpha_rad, cmd_rad, tau, dt),
+                              alpha_rad).alpha_rad;
 }
 
 Eigen::VectorXd defaultLqrStateWeights(int n) {
