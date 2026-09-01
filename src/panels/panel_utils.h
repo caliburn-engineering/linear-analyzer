@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace caliburn {
 
@@ -49,6 +50,40 @@ inline void statusBadge(const char* label, const ImVec4& colour,
         ImGui::TextUnformatted(explain);
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
+    }
+}
+
+/// "Which traces are missing from this plot, and on purpose."  One line,
+/// always, whatever is suppressed.
+///
+/// This one matters more than an ordinary badge line, because of where it
+/// sits.  The reasons have to be drawn BEFORE the plot — a plot consumes
+/// `GetContentRegionAvail()`, so anything after it is clipped out of the panel
+/// entirely — which means a line that comes and goes here does not merely
+/// shift the controls below it.  It resizes the plot: the axes rescale and the
+/// whole curve moves, for a reason the reader cannot see.
+///
+/// A suppressed trace must still be distinguishable from a broken one, so the
+/// trace's name is shown in the warning colour rather than hidden.  Only the
+/// sentence saying WHY moves to the hover, where there is room for it to be a
+/// sentence rather than a truncated fragment.
+///
+/// `skip` is the index of a system that never reports a reason; pass -1 for
+/// none.
+inline void drawSuppressedTraces(const std::string* reasons,
+                                 const char* const* names,
+                                 int n, int skip) {
+    ImGui::TextDisabled("suppressed:");
+    bool any = false;
+    for (int s = 0; s < n; ++s) {
+        if (s == skip || reasons[s].empty()) continue;
+        statusBadge(names[s], ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                    reasons[s].c_str());
+        any = true;
+    }
+    if (!any) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("none");
     }
 }
 

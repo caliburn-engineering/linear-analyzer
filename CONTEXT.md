@@ -167,6 +167,17 @@ collapse to a single line when the ball went off the edge, moving everything
 below it up by two rows at the precise moment the visitor was reaching for
 Reset Ball.
 
+The plot panels get the same treatment through `drawSuppressedTraces`, and
+there the stakes are higher than a shifted control.  The "why is this trace
+missing" line has to be drawn *above* the plot — a plot consumes
+`GetContentRegionAvail()`, so anything after it is clipped out of the panel
+entirely — which means a line that comes and goes does not merely move the
+widgets below it.  It resizes the plot: the axes rescale and the whole curve
+moves, for a reason the reader cannot see.  So the line is always there, reading
+`suppressed: none` when nothing is.  The trace's NAME stays visible in the
+warning colour, because a suppressed trace still has to be distinguishable from
+a broken one; only the sentence saying why moves to the hover.
+
 Not every conditional line is a defect.  A section that appears because the
 visitor changed a mode — the path sliders under a trajectory, the setpoint
 controls under an engaged loop — is a layout change they asked for and expect.

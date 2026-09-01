@@ -278,16 +278,11 @@ void drawBodePanel(AppState& state) {
     }
     if (freq_changed) state.needs_recompute = true;
 
-    // A suppressed trace must be distinguishable from breakage, so the reason
-    // is drawn BEFORE the plots — they consume GetContentRegionAvail(), and
-    // anything after them is clipped out of the panel entirely.
-    for (int s = 0; s < NUM_SYSTEMS; ++s) {
-        if (s == 2 || state.channel_reason[s].empty()) continue;
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.35f, 1.0f));
-        ImGui::TextWrapped("%s suppressed \xe2\x80\x94 %s", system_names[s],
-                           state.channel_reason[s].c_str());
-        ImGui::PopStyleColor();
-    }
+    // Drawn BEFORE the plots — they consume GetContentRegionAvail(), and
+    // anything after them is clipped out of the panel entirely.  Which is also
+    // why this is one fixed line rather than none, one or two: a line that came
+    // and went here would resize the plot underneath it.
+    drawSuppressedTraces(state.channel_reason, system_names, NUM_SYSTEMS, 2);
 
 
     if (state.show_all_channels) {
