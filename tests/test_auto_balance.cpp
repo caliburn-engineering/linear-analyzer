@@ -333,9 +333,14 @@ SimResult runClosedLoop(const ModelEntry& e,
 
 // 60 mm out along x and 40 mm back along y, at rest: a quarter of the plate's
 // radius, plainly visible in the 3D view and well outside anything a
-// linearisation could excuse.  Attract mode opens the application on this same
-// displacement, which is why it is the one measured here.  See
-// `AttractSchedule::start_x`.
+// linearisation could excuse.
+//
+// The application used to OPEN on this displacement, which is why it was the
+// one measured here.  It no longer does — that step input was the opening
+// slam, and the demo now starts the ball already tracing a circle (see
+// `attract_mode.h`).  The displacement stays as the yardstick anyway: "recover
+// from a quarter of the plate, at rest" is the question this file exists to
+// ask of a gain, and it is a harder one than the opening now poses.
 const Eigen::Vector4d kDisplaced(0.06, -0.04, 0.0, 0.0);
 
 // The weights the application opens on.  If THIS does not balance the ball,

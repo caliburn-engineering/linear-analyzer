@@ -326,70 +326,86 @@ Decided in [#22](https://github.com/caliburn-engineering/caliburn/issues/22).
 ### Attract mode
 
 The application driving itself for a visitor who has not arrived yet: the
-balance loop engaged as soon as a gain exists, the ball opening 72 mm off
-centre, and a velocity kick every four seconds until somebody touches the page.
-Named after the arcade cabinet's demo reel, which solves exactly this problem.
+balance loop engaged as soon as a gain exists, and the ball already tracing a
+120 mm circle at a ten-second lap.  Named after the arcade cabinet's demo reel,
+which solves exactly this problem.
 
-The point is **recovery**, not motion.  A motionless canvas is
-indistinguishable from a broken build, and a still balanced ball reads as a
-photograph of one — but a ball that is knocked off centre and comes back is a
-control system, and nothing else looks like that.  A visitor gives the page
-about ten seconds and will not go looking for a play button.
+A motionless canvas is indistinguishable from a broken build, and a still
+balanced ball reads as a photograph of one.  A visitor gives the page about ten
+seconds and will not go looking for a play button.
 
-Three decisions carry it:
+**This used to be a disturbance schedule, and the change is worth recording
+because the original reasoning was sound.**  The demo opened with the ball 72 mm
+off centre and kicked it every four seconds, on the argument that what
+distinguishes a control system from an animation is *recovery*: something
+disturbs the ball and the loop puts it back.  In practice it read as a fault.
 
-- **The opening is a displacement, the disturbances are velocity kicks.**  At
-  `t = 0` there is nothing on screen yet for a kick to be a change *from*, so
-  the ball simply starts off centre and is already moving on the first frame
-  that draws.  Afterwards a position teleport would read as a glitch in the
-  render; an impulse reads as something having hit the ball.
-- **The schedule is a pure function of elapsed time**, with no random number
-  anywhere.  Every acceptance criterion is a claim about what a visitor sees,
-  and a schedule that differed run to run could only be checked by watching it.
-  Written this way, `tests/test_attract_mode.cpp` runs the whole minute against
-  the nonlinear plate: the kick throws the ball 24-30 mm out, the loop has it
-  back inside 10 mm before the next one, and it never leaves the plate — over
-  ten minutes, and from all 720 directions swept rather than the fifteen the
-  schedule happens to reach in a minute.  That last distinction is #22: the
-  one-minute check passed while the demo was broken.
-- **The clock is the simulation's, not the wall's.**  The plate advances by a
-  fixed 1/60 per frame, so a device that cannot hold 60 fps plays the whole
-  demo slow.  Pacing the kicks by a wall clock would then drop the next one
-  onto a recovery still in progress — losing exactly the reading the mode
-  exists to produce.  A slow device gets the demo late rather than incoherent,
-  and the first kick is pulled in to 2.5 s so that "late" still lands inside
-  the ten seconds a stranger gives the page.  Kicks are counted rather than
-  triggered on an interval, which is what makes one undeliverable twice.
-- **The kick is sized to what the loop can actually reject**, 0.26 m/s, not to
-  what looks dramatic.  See *Workspace vs. servo box*: the demo has no business
-  delivering a disturbance the controller loses the ball to.
+Two reasons, and the first is the one that matters:
+
+- **A kick is legible only against a still baseline.**  A ball parked at the
+  centre, nudged, returning — that is a story.  But the still moment between
+  kicks is also the moment the page looks like a static image, so the demo
+  spent most of its time looking broken in order to make the other part legible.
+  A circle needs no baseline: at every instant the ball is somewhere it was
+  told to be and the plate is visibly working to keep it there.  The loop is
+  not demonstrating that it *can* respond, it is demonstrating that it *is*
+  responding, continuously — which is also the more honest claim, since it is
+  the one running every frame.
+- **The opening displacement was a step input.**  Handing a state feedback
+  72 mm of error at `t = 0`, with the legs exactly at home and no servo history
+  to smear it, is a step: measured, the legs swung **20.7 degrees apart within
+  three frames** and the table dropped 4.5 mm before settling inside 250 ms.
+  Correct, and it looked like the mechanism glitching.  Starting the ball ON
+  the path at the path's own velocity makes both the position and the velocity
+  error zero at `t = 0`; the same measurement then gives a **3.0 degree**
+  opening swing with the table height not moving at all.  Pinned by
+  `test_the_opening_does_not_slam_the_legs`.
+
+What is given up is stated plainly, because it was a real acceptance criterion:
+**the demo no longer shows disturbance rejection unprompted.**  The visitor can
+still see it — the Nudge buttons are right there — and the property is still
+pinned by `tests/test_attract_mode.cpp`, which sweeps a 0.26 m/s disturbance
+over all 720 directions and checks the ball comes home from every one.  It is
+no longer *performed*.  That sweep also moved: the kick used to be production
+code the demo delivered, and is now a test fixture, because what it tests is a
+property of the plant and the gain rather than of the demo.
+
+Two decisions carry the opening:
+
+- **The opening state is a state, not a performance.**  It is set once in the
+  constructor and then the visitor owns it.  The old mode had to watch for a
+  visitor arriving so it could stand its kicks down, and never resume; a circle
+  has nothing to stand down, so the watching went with it.
+- **The circle rather than a cornered shape.**  Its tracking error is smooth,
+  so the opening reads as competence rather than as the ball stumbling at every
+  corner.  The corners are the better demonstration and are one dropdown away —
+  but they are an argument the visitor should choose to hear, not the first
+  thing they see.  120 mm at a ten-second lap is 75 mm/s, a third of the speed
+  cap, tracked to 3.7 mm.
 
 `setDesign` is where the loop first closes, and it has to be: on the opening
 frame the LQR solve has not run, so a `balance_engaged_` set true in the
 constructor would be cleared by the stale-gain drop and never set again.
 Engaging on the first *usable* design is what "already stabilising at load"
-actually amounts to.
+actually amounts to.  It fires **once** — without the latch it would re-engage
+a loop the visitor had deliberately dropped, on the very next frame, which is
+the demo arguing with the person using it.
 
-The application also now opens with `ControllerType::LQR` selected and the
+The application also opens with `ControllerType::LQR` selected and the
 closed-loop trace visible, since a page whose whole claim is that the loop is
 closed should not open its pole-zero map on the open-loop poles.
 
-Attract mode stands down at the first click, scroll or key, and **never
-resumes**.  A ball being kicked by nobody while the visitor is driving the
-plate themselves is a puzzle, not a demonstration.  One-way on purpose: an idle
-visitor is still a visitor, and a demo that started kicking again behind their
-back would be worse than one that stopped.  The loop it engaged stays engaged —
-standing down means giving up the disturbances, not the controller.
-
-Decided in [#17](https://github.com/caliburn-engineering/caliburn/issues/17).
+Decided in [#17](https://github.com/caliburn-engineering/caliburn/issues/17),
+revised for the opening path in
+[#24](https://github.com/caliburn-engineering/caliburn/issues/24).
 
 > **Not "demo mode", "idle mode" or "screensaver".**
 > All three name a state the application is *stuck in* until something releases
 > it, and two of them imply a substitute for the real thing — a canned loop
 > playing where the product would be.  Nothing here is canned: the plate, the
 > gain and the rolling ball are the same ones the visitor gets, and the only
-> difference is who is providing the disturbances.  "Attract" also says what
-> the mode is *for*, which is the test any addition to it has to pass.
+> difference is who is choosing the setpoint.  "Attract" also says what the
+> mode is *for*, which is the test any addition to it has to pass.
 >
 > Prose may still call the running page "the demo" — that is the artefact, not
 > the mode.
@@ -407,11 +423,18 @@ down under the ball, the plate's rotation swinging the contact point, and
 Coriolis.  **`N/m ≤ 0` is separation**: a surface can push a ball and never
 pull it.
 
-This is not a corner case.  Measured under the shipped tuning and the shipped
-0.26 m/s kick, the ball separates in 30 of 72 kick directions — briefly, a few
-frames, hopping 6.7 mm.  The plate heaves hard because the legs do
-(`z_c = 0.30·sin α`, so a 20° leg swing is 74 mm of table in a tenth of a
-second), and a loop rejecting a disturbance slams the legs.
+This is not a corner case.  Measured under the shipped tuning and a 0.26 m/s
+disturbance, the ball separates in 30 of 72 directions — briefly, a few frames,
+hopping 6.7 mm.  The plate heaves hard because the legs do (`z_c = 0.30·sin α`,
+so a 20° leg swing is 74 mm of table in a tenth of a second), and a loop
+rejecting a disturbance slams the legs.
+
+**Distinguish the tuning from the demo here, since they parted company.**  The
+shipped *tuning* hops, as above, and a visitor pressing Nudge will see it.  The
+shipped *demo* no longer does, because it no longer kicks the ball: tracing a
+gentle circle never separates it, and `test_ten_minutes_unattended_never_loses_the_ball`
+asserts exactly that — zero airborne frames in ten minutes.  Both facts are
+pinned, and neither implies the other.  See *Attract mode*.
 
 **Two phases, two frames, and the frame is not a detail.**  Rolling is natural
 in the plate frame — that is where `RollingBallDynamics` integrates and where

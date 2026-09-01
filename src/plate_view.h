@@ -74,9 +74,9 @@ public:
     /// legs have first-order lag in manual driving too, and the model panel's
     /// tau slider is the one place that number lives.
     ///
-    /// This is also where attract mode closes the loop for the first time —
-    /// see `attract_running_`.  Engaging and dropping are the same decision
-    /// read in two directions, and they belong at the same seam.
+    /// This is also where the opening closes the loop for the first time —
+    /// see `auto_engaged_`.  Engaging and dropping are the same decision read
+    /// in two directions, and they belong at the same seam.
     void setDesign(const AutoBalanceDesign& d, bool offered,
                    const std::string& reason);
 
@@ -108,10 +108,6 @@ private:
     /// The single authority: `step` acts on it and `drawControls` greys the
     /// manual controls on it, so the two cannot disagree about who is driving.
     bool loopDriving() const;
-
-    /// Deliver whatever disturbances the attract schedule owes, and stand down
-    /// the moment a visitor touches anything.  No-op once they have.
-    void stepAttract();
 
     TableKinematics tk_;
     RollingBallDynamics ball_dynamics_;
@@ -174,24 +170,33 @@ private:
     double manipulability_ = 0.0;
     float sim_time_ = 0.0f;
 
-    // --- Attract mode ---
+    // --- The opening ---
     // The demo running itself until somebody turns up: the loop engaged as
-    // soon as a gain exists, the ball opening off centre, and a kick every few
-    // seconds.  Without it the page opens on a balanced ball sitting still,
-    // which is indistinguishable from a broken build.  See issue #17.
+    // soon as a gain exists, and the ball already tracing a circle.  Without
+    // it the page opens on a balanced ball sitting still, which is
+    // indistinguishable from a broken build.  See issue #17 and
+    // `attract_mode.h`.
     //
-    // One-way.  An idle visitor is still a visitor, and a demo that started
-    // kicking the ball again behind their back would be worse than one that
-    // stopped.
+    // There is no schedule and no running flag any more.  The opening is a
+    // STATE, not a performance: it is set once in the constructor and then the
+    // visitor owns it — change the trajectory, drag the setpoint, engage or
+    // drop the loop, and nothing here will argue.  The old attract mode had to
+    // watch for a visitor arriving so it could stand its kicks down; a circle
+    // has nothing to stand down.
+    //
+    // One latch survives, below, and only because the loop cannot be engaged
+    // on frame zero.
     //
     // The other half of the opening state is not here and cannot be: selecting
     // LQR is a fact about the model panel's controller type, which this class
     // deliberately cannot see — `handDesignToPlate` exists for exactly that
     // reason.  It is set beside the rest of the app's opening state, in
     // `visualizer.cpp`'s main().
-    AttractSchedule attract_{};
-    bool attract_running_ = true;
-    int attract_kicks_done_ = 0;
+
+    /// Whether the loop has yet been engaged for the visitor, once, without
+    /// being asked.  A one-shot latch rather than a mode: after it fires the
+    /// checkbox is the visitor's, and a loop they drop stays dropped.
+    bool auto_engaged_ = false;
 
     // --- Ball ---
     // Six states now, in two phases: the plate can lose contact and the ball

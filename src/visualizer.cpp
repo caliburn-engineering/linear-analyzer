@@ -683,8 +683,8 @@ int main() {
     // demo opens with one already running: a visitor gets about ten seconds
     // and will not go looking for a combo box to make the page do something.
     // The default preset is the cascade, so LQR here means the plate is handed
-    // a usable gain on the second frame and attract mode closes the loop —
-    // see PlateView's `attract_running_` and issue #17.
+    // a usable gain on the second frame and the opening closes the loop —
+    // see PlateView's `auto_engaged_` and issue #17.
     //
     // The closed-loop trace comes on with it.  Under LQR the plant is the only
     // trace enabled by default, so the pole-zero map would open showing the

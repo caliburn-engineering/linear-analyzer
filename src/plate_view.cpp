@@ -70,33 +70,6 @@ RollingBallDynamics ballDynamicsFor(const TableParams& table) {
     return RollingBallDynamics(kPlateBall, plate);
 }
 
-// Is anybody touching anything, on this frame?
-//
-// A poll, deliberately, and not a "has the visitor arrived" fact: the latch is
-// one line at the call site in `stepAttract`, where it can be read next to the
-// flag it sets.  Attract mode's disturbances are for an empty room — a ball
-// being kicked by nobody while the visitor is driving the plate themselves is
-// a puzzle, not a demonstration — so any click, any scroll, any key ends them.
-//
-// Read off ImGui rather than GLFW because ImGui is the one place that already
-// merges mouse, wheel, keyboard and touch into a single input state — and
-// touch is how half of the visitors this ticket exists for will arrive.  The
-// named-key range is the sweep ImGui itself documents for input mappers, and
-// it covers the mouse buttons too; the wheel is checked separately because a
-// wheel is an axis rather than a button and reads as motion, not a press.
-//
-// This is the one part of attract mode with no test behind it: it needs a live
-// ImGui context and a real input event, and wrapping an abstraction around one
-// bool to get a seam would cost more than it proves.  It is checked in a
-// browser instead — click, then thirty seconds of idle with no further kick.
-bool visitorIsTouchingSomething() {
-    const ImGuiIO& io = ImGui::GetIO();
-    if (io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f) return true;
-    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
-        if (ImGui::IsKeyDown(static_cast<ImGuiKey>(k))) return true;
-    return false;
-}
-
 // The scroll wheel is the one input this class cannot read by polling: GLFW
 // only delivers it as an event.  One instance drives the app, so a file-scope
 // pointer is enough and keeps the callback free of captures.
@@ -139,10 +112,14 @@ PlateView::PlateView()
     plate_motion_ = plateMotion(tk_, pose_, legsRad(), {0.0, 0.0, 0.0});
     plate_motion_prev_ = plate_motion_;
 
-    // Attract mode's opening frame.  The ball is placed rather than kicked:
-    // at t = 0 there is nothing on screen yet for a kick to be a change from,
-    // and a ball already off centre is moving on the first frame that draws.
-    ball_.rolling = attractStart(attract_);
+    // The opening frame: the ball already on a circle and already moving
+    // along it, so the first frame that draws is a frame of the demo working
+    // rather than a frame of it starting up.  Both errors are zero here, which
+    // is what keeps the legs still — see `attract_mode.h`.
+    path_ = openingPath();
+    path_radius_mm_ = static_cast<float>(path_.radius_m * 1000.0);
+    path_period_s_ = static_cast<float>(path_.period_s);
+    ball_.rolling = attractStart(path_);
 
     plots_ = {
         {"Ball Position [mm]", {&s_bx_, &s_by_}, 0},
@@ -225,14 +202,20 @@ void PlateView::setDesign(const AutoBalanceDesign& d, bool offered,
     // command: a stale gain is not a controller.  The one place this happens.
     if (balance_engaged_ && !designUsable()) balance_engaged_ = false;
 
-    // And the one place it is engaged without being asked.  Attract mode
-    // cannot open with `balance_engaged_` simply set true: on the first frame
-    // the LQR solve has not run yet, so the drop above would clear the flag
-    // and nothing would ever set it again.  Engaging on the first usable
-    // design instead means the demo starts balancing the moment it CAN, which
-    // is a frame later and is what "already stabilising at load" amounts to.
-    if (attract_running_ && !balance_engaged_ && ball_enabled_ && designUsable())
+    // And the one place it is engaged without being asked.  The demo cannot
+    // open with `balance_engaged_` simply set true: on the first frame the LQR
+    // solve has not run yet, so the drop above would clear the flag and
+    // nothing would ever set it again.  Engaging on the first usable design
+    // instead means the demo starts balancing the moment it CAN, which is a
+    // frame later and is what "already stabilising at load" amounts to.
+    //
+    // Once, and then never again.  Without the latch this would re-engage a
+    // loop the visitor had deliberately dropped, on the very next frame, which
+    // is the demo arguing with the person using it.
+    if (!auto_engaged_ && !balance_engaged_ && ball_enabled_ && designUsable()) {
         balance_engaged_ = true;
+        auto_engaged_ = true;
+    }
 }
 
 void PlateView::resetBall() {
@@ -399,12 +382,6 @@ void PlateView::step(GLFWwindow* window, float dt) {
     plate_motion_prev_ = plate_motion_;
     plate_motion_ = plateMotion(tk_, pose_, alpha_now, alpha_dot);
 
-    // --- Attract mode ---
-    // After the controller has read the ball and before the ball is
-    // integrated: a disturbance the loop can see on the frame it happens is
-    // not a disturbance, it is a feedforward term.
-    stepAttract();
-
     // --- Ball ---
     if (ball_enabled_ && ball_on_plate_) {
         ball_ = stepBallContact(ball_dynamics_, ball_, plate_motion_,
@@ -440,35 +417,6 @@ void PlateView::step(GLFWwindow* window, float dt) {
     push_series(s_a2_,    alpha_deg_[2], plot_state_);
     push_series(s_cond_,  static_cast<float>(condition_num_), plot_state_);
     push_series(s_zc_,    static_cast<float>(pose_.z_c * 1000), plot_state_);
-}
-
-void PlateView::stepAttract() {
-    if (!attract_running_) return;
-
-    // The latch, and the only one: attract mode never resumes.  An idle
-    // visitor is still a visitor, and a demo that started kicking the ball
-    // again behind their back would be worse than one that stopped.
-    if (visitorIsTouchingSomething()) {
-        attract_running_ = false;
-        return;
-    }
-
-    // One kick at a time, and it can only ever BE one: `sim_time_` advances by
-    // a fixed 1/60 per frame, so a gap measured in seconds cannot be spanned
-    // in a single step however long the frame took in real time.  The count is
-    // here to make a kick undeliverable twice, not to catch up on a backlog
-    // this clock cannot accumulate.
-    // And not while the ball is off the plate.  `rolling` is not the ball's
-    // state during a hop — `flight_p`/`flight_v` are — and `stepBallContact`
-    // rewrites `rolling` wholesale on landing, so a kick added here mid-hop is
-    // not a kick applied late, it is a kick silently thrown away while the
-    // counter records it as delivered.  Holding it costs a few frames and the
-    // visitor sees the nudge they were going to see.
-    if (!ball_.airborne &&
-        attractKicksBy(attract_, sim_time_) > attract_kicks_done_) {
-        ball_.rolling += attractKick(attract_, attract_kicks_done_);
-        ++attract_kicks_done_;
-    }
 }
 
 void PlateView::drawPanels() {
