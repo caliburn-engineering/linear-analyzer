@@ -26,7 +26,7 @@ Then launch from the repo root — the app reads `imgui.ini` and `vendor/fonts/`
 relative to cwd, and opens on the *active* workspace, so the order matters.
 
 ```bash
-cd projects/linear-analyzer
+cd projects/ball-balancer
 setsid ./build/visualizer >/tmp/viz.log 2>&1 &
 sleep 4
 ```

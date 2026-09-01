@@ -3,8 +3,11 @@
 One application over two halves: a 3-RRS table balancing a ball under real
 rolling dynamics, and the analyzer that models a plant, closes a loop around it,
 and shows the consequences across Bode, Nyquist, pole-zero and step-response
-views.  The repository is still named `linear-analyzer` — the merge (issue #13)
-renamed no directory.
+views.  The repository was named `linear-analyzer` until
+[#20](https://github.com/caliburn-engineering/caliburn/issues/20): it is the
+survivor of the merge and carries the whole history, so the name moved to match
+the product rather than the other way round.  The pre-merge ball-balancer
+repository is kept on disk, unmodified, as `ball-balancer-legacy`.
 
 ## Glossary
 
