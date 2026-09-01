@@ -6,6 +6,7 @@
 // ES 3.0 headers.
 #include <GLFW/glfw3.h>
 #include "imgui.h"
+#include "panels/panel_utils.h"
 
 #include <algorithm>
 #include <array>
@@ -434,28 +435,33 @@ void PlateView::drawControls() {
     ImGui::SameLine();
     ImGui::Checkbox("Auto-reset", &ball_auto_reset_);
 
-    if (ball_on_plate_) {
-        const Eigen::Matrix<double, 6, 1> bp =
-            plateFrame(ball_, plate_motion_, kBallRadius);
-        ImGui::Text("Position: %+7.1f, %+7.1f mm",
-                    bp(0) * 1000, bp(1) * 1000);
-        ImGui::Text("Velocity: %+7.1f, %+7.1f mm/s",
-                    bp(3) * 1000, bp(4) * 1000);
-        // Height and the fact of the hop.  The flash is because a separation
-        // lasts a handful of frames and would otherwise be a line of text
-        // nobody is quick enough to read.
-        if (ball_.airborne) {
-            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.15f, 1.0f),
-                               "AIRBORNE  %+.1f mm, %+.0f mm/s",
-                               (bp(2) - kBallRadius) * 1000, bp(5) * 1000);
-        } else if (airborne_flash_s_ > 0.0f) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                               "the ball left the plate");
-        } else {
-            ImGui::TextDisabled("in contact");
-        }
+    // Three lines, always, whatever the ball is doing.  A ball that has gone
+    // off the edge used to collapse this whole block to a single line, which
+    // moved every control below it up by two rows at the exact moment the
+    // visitor was reaching for Reset Ball.  When the sim has stopped, the
+    // readings are simply the last ones taken — which is the useful thing to
+    // show anyway, since they say where it went.
+    const Eigen::Matrix<double, 6, 1> bp =
+        plateFrame(ball_, plate_motion_, kBallRadius);
+    ImGui::Text("Position: %+7.1f, %+7.1f mm", bp(0) * 1000, bp(1) * 1000);
+    ImGui::Text("Velocity: %+7.1f, %+7.1f mm/s", bp(3) * 1000, bp(4) * 1000);
+
+    // Exactly one contact line, every frame.  The `else` is not clutter: it is
+    // what stops the panel below moving when the ball settles.  The flash
+    // exists because a separation lasts a handful of frames and would
+    // otherwise be a line of text nobody is quick enough to read.
+    if (!ball_on_plate_) {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                           "the ball has left the plate");
+    } else if (ball_.airborne) {
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.15f, 1.0f),
+                           "AIRBORNE  %+.1f mm, %+.0f mm/s",
+                           (bp(2) - kBallRadius) * 1000, bp(5) * 1000);
+    } else if (airborne_flash_s_ > 0.0f) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                           "the ball left the plate");
     } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Ball has left the plate");
+        ImGui::TextDisabled("in contact");
     }
 
     if (ImGui::Button("Reset Ball")) resetBall();
@@ -480,10 +486,15 @@ void PlateView::drawControls() {
     ImGui::SeparatorText("Servo Angles");
 
     const bool driven = loopDriving();
+    // Both branches, so the sliders below do not move by a row when the loop
+    // is engaged.  Saying who is driving is worth a line; saying it only half
+    // the time is worth a line that jumps.
     if (driven) {
         // Not hidden — the sliders become the readout of what u = -Kx is
         // asking for, which is the most direct view of the loop working.
         ImGui::TextDisabled("commanded by the LQR gain");
+    } else {
+        ImGui::TextDisabled("drag to command the legs");
     }
     ImGui::BeginDisabled(driven);
 
@@ -688,23 +699,40 @@ void PlateView::drawBalanceControls() {
         plateFrame(ball_, plate_motion_, kBallRadius);
     const double err = std::hypot(bp(0) - sp_x_mm_ * 1e-3,
                                   bp(1) - sp_y_mm_ * 1e-3);
+    // Both warnings ride on the error line rather than taking lines of their
+    // own.  They are independent and they flicker at frame rate, so on their
+    // own lines the whole panel below has three resting positions and a slider
+    // the visitor is reaching for moves out from under the cursor.  See
+    // `statusBadge`.
+    //
+    // The error reading is also the right line to hang them on: it is the
+    // number they explain.  "error: 178.2 mm  clipped" says both that the loop
+    // is a long way off and why it is not closing the gap.
     ImGui::Text("error: %6.1f mm", err * 1000.0);
 
     if (balance_clipped_) {
-        // A different thing from saturation, and worth its own line: the legs
-        // are inside their travel and the controller is still not getting what
-        // it asked for, because the pose it wants is not one this mechanism
-        // has.  See CONTEXT.md, "Workspace vs. servo box".
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                           "command clipped to the plate's workspace");
+        // A different thing from saturation: the legs are inside their travel
+        // and the controller is still not getting what it asked for, because
+        // the pose it wants is not one this mechanism has.
+        statusBadge("clipped", kBadgeWarn,
+                    "The command was pulled back toward the home pose until "
+                    "the mechanism could actually assemble it.\n\n"
+                    "Distinct from saturation: every leg is inside its travel "
+                    "limits, and the pose they were asked for still does not "
+                    "exist. The servo limits are a box; the workspace is not, "
+                    "and barely half the box has an assembly at all.\n\n"
+                    "See CONTEXT.md, \"Workspace vs. servo box\".");
     }
 
     if (balance_saturated_) {
-        // Not a failure — the legs really do stop at 10 and 80 degrees.  But a
-        // tuning that lives against the stops is not the tuning that was
-        // designed, and the closed-loop poles on screen stop describing it.
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                           "leg command saturated");
+        // Not a failure — the legs really do stop at 10 and 80 degrees.
+        statusBadge("saturated", kBadgeWarn,
+                    "At least one leg command hit a travel limit and was "
+                    "clamped there.\n\n"
+                    "Not a failure: the servos really do stop at 10 and 80 "
+                    "degrees. But a tuning that lives against the stops is no "
+                    "longer the tuning that was designed, and the closed-loop "
+                    "poles on screen stop describing it.");
     }
 }
 

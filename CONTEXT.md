@@ -134,6 +134,44 @@ qualifier, supplied as a separate source string ahead of one shared body.
 WebGL2, so line weight is decorative here and carries no information: every
 element of the scene is told apart by colour.
 
+### Status badges, and why nothing gets its own line
+
+**Text that comes and goes must never change the layout's height.**
+
+A warning drawn on its own line pushes every control below it down while it is
+showing and lets them snap back when it stops.  Several of these conditions are
+recomputed every frame — `balance_clipped_` and `balance_saturated_` both are —
+so the panel below them does not settle into a new position, it *vibrates*, and
+a slider the visitor is reaching for moves out from under the cursor.  Two
+independent warnings make it worse: the controls below have three different
+resting positions depending on which are showing.
+
+Two rules, and both are needed:
+
+- **A conditional message rides on a line that is always drawn**, appended with
+  `statusBadge` (`panels/panel_utils.h`).  It costs no vertical space, it
+  cannot reflow anything, and the line it attaches to is usually the reading it
+  qualifies: `error: 178.2 mm  clipped  saturated` says in one line both that
+  the loop is a long way off and why it is not closing the gap.  The label is a
+  word or two — a badge that wraps has reintroduced the problem — and the
+  sentence explaining what the condition *means* goes in the hover tooltip,
+  where there is room for it.
+- **Where a message is one of several alternatives, draw every branch.**  A
+  trailing `else` with a disabled "in contact" or "drag to command the legs" is
+  not clutter; it is what holds the line open so the panel stays still.  This
+  half cannot be enforced by a helper, only by remembering it.
+
+The block that reports the ball follows both: three lines, always — position,
+velocity, and exactly one contact line out of four possibilities.  It used to
+collapse to a single line when the ball went off the edge, moving everything
+below it up by two rows at the precise moment the visitor was reaching for
+Reset Ball.
+
+Not every conditional line is a defect.  A section that appears because the
+visitor changed a mode — the path sliders under a trajectory, the setpoint
+controls under an engaged loop — is a layout change they asked for and expect.
+The rule is about text that appears because the *plant* did something.
+
 ### Tilt convention (phi/theta vs alpha/beta)
 
 The two halves name the plate's tilt differently, and the mapping is neither
