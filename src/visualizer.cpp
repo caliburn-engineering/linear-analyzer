@@ -4,6 +4,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/html5.h>  // emscripten_get_device_pixel_ratio — see uiScale()
 #else
 #include <glad/glad.h>
 #endif
@@ -79,6 +80,32 @@ struct FrameContext {
     std::vector<caliburn::ModelEntry>* presets;
     caliburn::PlateView* plate;
 };
+
+// How many framebuffer pixels one logical UI pixel should occupy.
+//
+// ImGui lays out in framebuffer pixels, and the web shell sizes the canvas
+// backing store to innerWidth * devicePixelRatio.  On a 390 px phone at dpr 3
+// that is a 1170 px framebuffer displayed across 390 px of glass, so a 16 px
+// glyph arrives on screen about five pixels tall — working, animating, and
+// completely unreadable (#25).  Scaling the font atlas and every style metric
+// by the same ratio puts a 16 px glyph back at 16 px *as seen*, and because the
+// dock layout is proportional rather than absolute the panels keep their places.
+//
+// Desktop returns 1.0 deliberately.  The desktop window's framebuffer and its
+// logical size already agree on the machines this is developed on, and #25 asks
+// for desktop rendering to be untouched at 1440x900.
+static float uiScale() {
+#ifdef __EMSCRIPTEN__
+    const double dpr = emscripten_get_device_pixel_ratio();
+    // A dpr below 1 would shrink text that is already the right size, and an
+    // absurd one would blow the font atlas up for no gain.  Neither is a real
+    // device; both are cheap to refuse.
+    if (!(dpr > 0.0)) return 1.0f;
+    return static_cast<float>(std::clamp(dpr, 1.0, 4.0));
+#else
+    return 1.0f;
+#endif
+}
 
 // One dockspace for both panel sets.  Built once, and only when ImGui has no
 // layout of its own — a saved imgui.ini always wins, so a user's arrangement
@@ -637,13 +664,23 @@ int main() {
         0,
     };
 
+    // Baked once at startup rather than tracked across resizes: rebuilding the
+    // font atlas costs a texture upload, and a phone does not change its pixel
+    // ratio mid-session.  A desktop browser dragged between monitors of
+    // different density is the one case this misses, and it costs a reload.
+    const float ui_scale = uiScale();
+
     const char* font_path = "vendor/fonts/NotoSans-Regular.ttf";
     if (FILE* f = std::fopen(font_path, "rb")) {
         std::fclose(f);
-        io.Fonts->AddFontFromFileTTF(font_path, 16.0f, &font_cfg, glyph_ranges);
+        io.Fonts->AddFontFromFileTTF(font_path, 16.0f * ui_scale, &font_cfg, glyph_ranges);
     } else {
         std::fprintf(stderr, "Warning: %s not found, using default font\n", font_path);
         io.Fonts->AddFontDefault();
+        // The built-in font is a fixed-size bitmap, so it cannot be baked
+        // larger.  Stretching it is ugly but legible, which beats correct and
+        // unreadable on the one path where the bundled TTF is missing.
+        io.FontGlobalScale = ui_scale;
     }
 
     ImGui::StyleColorsDark();
@@ -651,6 +688,44 @@ int main() {
     style.WindowRounding = 6.0f;
     style.FrameRounding = 4.0f;
     style.GrabRounding = 4.0f;
+    // After the rounding values, so they scale with everything else: padding,
+    // scrollbar and grab sizes, and the dock separator you have to hit with a
+    // finger rather than a mouse.
+    style.ScaleAllSizes(ui_scale);
+
+    // ImPlot keeps its own metrics, and ScaleAllSizes does not reach them. Left
+    // unscaled, axis labels sit hard against plot edges and the tick text runs
+    // into the frame once the font grows.
+    if (ui_scale != 1.0f) {
+        ImPlotStyle& plot = ImPlot::GetStyle();
+        auto scale2 = [ui_scale](ImVec2 v) { return ImVec2(v.x * ui_scale, v.y * ui_scale); };
+
+        // Padding: without this the tick labels grow into the plot frame.
+        plot.PlotPadding        = scale2(plot.PlotPadding);
+        plot.LabelPadding       = scale2(plot.LabelPadding);
+        plot.LegendPadding      = scale2(plot.LegendPadding);
+        plot.LegendInnerPadding = scale2(plot.LegendInnerPadding);
+        plot.LegendSpacing      = scale2(plot.LegendSpacing);
+        plot.MousePosPadding    = scale2(plot.MousePosPadding);
+        plot.AnnotationPadding  = scale2(plot.AnnotationPadding);
+
+        // Ticks and rules are specified in pixels, so at dpr 3 an unscaled
+        // 1 px grid line is a third of a pixel on the glass — present in the
+        // buffer, invisible on the screen.
+        plot.MajorTickLen  = scale2(plot.MajorTickLen);
+        plot.MinorTickLen  = scale2(plot.MinorTickLen);
+        plot.MajorTickSize = scale2(plot.MajorTickSize);
+        plot.MinorTickSize = scale2(plot.MinorTickSize);
+        plot.MajorGridSize = scale2(plot.MajorGridSize);
+        plot.MinorGridSize = scale2(plot.MinorGridSize);
+        plot.PlotBorderSize *= ui_scale;
+
+        // Minimum and default plot sizes are a floor in pixels. Scaling them
+        // keeps the floor at a constant *logical* size, so a plot cannot
+        // collapse to something smaller than it would be on a desktop.
+        plot.PlotMinSize     = scale2(plot.PlotMinSize);
+        plot.PlotDefaultSize = scale2(plot.PlotDefaultSize);
+    }
 
     // Constructed before the ImGui backend so that its scroll callback is the
     // *previous* one, which the backend chains to instead of replacing.
