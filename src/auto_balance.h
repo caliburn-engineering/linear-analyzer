@@ -215,4 +215,82 @@ std::array<double, 3> stepServosOnPlate(const TableKinematics& tk,
 Eigen::VectorXd defaultLqrStateWeights(int n);
 Eigen::VectorXd defaultLqrInputWeights(int m);
 
+/// The largest disturbance the interface can hand the loop: the top of Plate
+/// Control's Nudge slider, in m/s along one axis.
+///
+/// Here rather than beside the slider because it is what bounds an honest
+/// preset.  "This tuning does not lose the ball" is only a claim if something
+/// says how hard the ball can be hit, and the answer is whatever the UI lets a
+/// visitor ask for.  The slider reads this constant and so does the test that
+/// checks the presets against it — raise it and the test fails, which is the
+/// point.
+constexpr double kMaxNudgeSpeed = 0.5;
+
+/// A named tuning, as a visitor meets it.
+///
+/// The demo's whole argument is that controller design has consequences you
+/// can watch, and the fastest way to make that argument is to let someone flip
+/// between two tunings of the same plant.  A weighting matrix cannot make it
+/// in five seconds; a pair of buttons can.
+///
+/// A *tuning*, not a plant: "preset" means a built-in plant model everywhere
+/// else in this application, and these choose Q and R against one plant rather
+/// than choosing the plant.
+struct LqrPreset {
+    const char* name;
+
+    /// One line, in the UI, saying what is about to happen.  Written from the
+    /// measurements in `test_auto_balance`, so a claim here that stops being
+    /// true fails a test rather than merely misleading somebody.
+    const char* blurb;
+
+    double q_position;  ///< Q on ball x and ball y
+    double q_velocity;  ///< Q on x' and y'
+    double r;           ///< R on every leg command
+};
+
+/// The three tunings, in the order the UI offers them: sluggish, shipped,
+/// saturating.  Ordered rather than sorted by any number — it is the order a
+/// visitor should press them in.
+///
+/// Every value was measured against the nonlinear plate rather than chosen for
+/// roundness; the measurements and what they rule out are recorded beside the
+/// table in `auto_balance.cpp`, and the claims each tuning makes are asserted
+/// in `test_auto_balance`.
+const std::array<LqrPreset, 3>& lqrPresets();
+
+/// The tuning the application opens on.  `defaultLqrStateWeights` is defined
+/// in terms of this rather than the other way round, so "Nominal is the
+/// startup tuning" is arithmetic rather than a coincidence two literals have
+/// to keep agreeing about.
+const LqrPreset& nominalPreset();
+
+/// A preset's weights, sized to a plant.
+///
+/// Keyed on dimensions, exactly as `defaultLqrStateWeights` is and for the
+/// same reason: this layer can see the plant's shape and nothing else.
+/// Anything that is not 7 states gets unit weights — a poor guess rather than
+/// a wrong answer, and the UI does not offer the presets off the cascade
+/// anyway, which it establishes by NAME (see `isCascadeModel`).
+Eigen::VectorXd presetStateWeights(const LqrPreset& p, int n);
+Eigen::VectorXd presetInputWeights(const LqrPreset& p, int m);
+
+/// Which preset these weights ARE, or -1 for none.
+///
+/// The presets are an offer, not a mode: the weights stay editable after one
+/// is chosen, and the moment a slider moves the answer is -1 again.  There is
+/// therefore no "selected preset" to store — storing one would go stale on the
+/// first drag and the UI would keep claiming a tuning the plant no longer has.
+/// This asks the weights instead, every frame, which cannot disagree with them.
+///
+/// Lives here rather than in the panel because it is the rule the highlight
+/// means, and a rule worth stating is worth testing.
+///
+/// -1 for anything that is not 7 states by 3 inputs: at any other shape every
+/// preset is unit weights, so a "match" would only be reporting that they have
+/// stopped differing.  Shape is necessary and not sufficient, exactly as in
+/// `gainFitsCascade` — the caller also has to know the plant IS the cascade,
+/// which no vector length can tell it.
+int activePreset(const Eigen::VectorXd& q, const Eigen::VectorXd& r);
+
 }  // namespace caliburn

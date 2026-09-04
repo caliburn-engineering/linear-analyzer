@@ -153,17 +153,76 @@ std::array<double, 3> stepServosOnPlate(const TableKinematics& tk,
                               alpha_rad).alpha_rad;
 }
 
-Eigen::VectorXd defaultLqrStateWeights(int n) {
+namespace {
+
+// The three tunings, measured rather than guessed.  Every number in the
+// blurbs is asserted in `test_auto_balance`, so a claim on screen that stops
+// being true fails a build rather than quietly misleading a visitor.
+//
+// R is 1 in all three.  Pricing the legs higher buys sluggishness the position
+// weight already buys more legibly, and pricing them lower buys a tuning that
+// loses the ball — measured, R = 0.1 against the nominal Q throws it off on 8
+// of 72 kick directions.  One knob moves, so a visitor can say which one they
+// just watched.
+//
+// The aggressive end is bounded by the ball, not by the solver.  Q on position
+// at 300 recovers the 60/-40 mm displacement faster still, and then flings the
+// ball clean off the plate on a 0.43 m/s nudge — the plate is moving out from
+// under it rather than tilting under it (issue #23).  150 is the fastest
+// tuning measured that loses the ball at no nudge magnitude the slider offers
+// and the nominal tuning survives.
+constexpr std::array<LqrPreset, 3> kPresets = {{
+    {"Detuned",
+     "sluggish - 11 s to settle against nominal's 1.8, and never near the stops",
+     20.0, 2.0, 1.0},
+    {"Nominal",
+     "the tuning the demo opens on - 1.8 s, well damped, no saturation",
+     100.0, 10.0, 1.0},
+    {"Aggressive",
+     "0.6 s, and living against the servo stops the whole way in",
+     150.0, 2.0, 1.0},
+}};
+
+constexpr int kNominalIndex = 1;
+
+}  // namespace
+
+const std::array<LqrPreset, 3>& lqrPresets() { return kPresets; }
+
+const LqrPreset& nominalPreset() { return kPresets[kNominalIndex]; }
+
+Eigen::VectorXd presetStateWeights(const LqrPreset& p, int n) {
     Eigen::VectorXd q = Eigen::VectorXd::Ones(n);
     if (n == kStates) {
-        q(3) = q(4) = 100.0;  // ball position is what the product is about
-        q(5) = q(6) = 10.0;   // and enough velocity weight to arrive damped
+        q(3) = q(4) = p.q_position;  // ball position is what the product is about
+        q(5) = q(6) = p.q_velocity;  // and enough velocity weight to arrive damped
     }
     return q;
 }
 
+Eigen::VectorXd presetInputWeights(const LqrPreset& p, int m) {
+    return Eigen::VectorXd::Constant(m, p.r);
+}
+
+int activePreset(const Eigen::VectorXd& q, const Eigen::VectorXd& r) {
+    // Off the cascade every preset collapses to unit weights, so a unit-weight
+    // plant would "match" whichever one is listed first.  That is not a match,
+    // it is the absence of a distinction, and saying -1 is the honest answer.
+    if (q.size() != kStates || r.size() != kLegs) return -1;
+    for (int i = 0; i < static_cast<int>(kPresets.size()); ++i) {
+        if (q.isApprox(presetStateWeights(kPresets[i], kStates)) &&
+            r.isApprox(presetInputWeights(kPresets[i], kLegs)))
+            return i;
+    }
+    return -1;
+}
+
+Eigen::VectorXd defaultLqrStateWeights(int n) {
+    return presetStateWeights(nominalPreset(), n);
+}
+
 Eigen::VectorXd defaultLqrInputWeights(int m) {
-    return Eigen::VectorXd::Ones(m);
+    return presetInputWeights(nominalPreset(), m);
 }
 
 }  // namespace caliburn

@@ -252,6 +252,78 @@ Decided in [#16](https://github.com/caliburn-engineering/caliburn/issues/16).
 > equilibrium of this plant, so that setpoint enters as a reference state and
 > needs no feedforward at all: the regulator is already a tracker.
 
+### Preset tunings
+
+Three named LQR tunings — **Detuned**, **Nominal**, **Aggressive** — in the
+model panel's LQR section, differing only in the ball's own state weights.  A
+visitor who flips between the outer two learns more about what controller
+design does in five seconds than the weighting matrices could tell them in five
+minutes, which is the whole reason they exist.
+
+> **Not the *plant* presets.**  "Preset" already means a built-in plant model
+> everywhere else here — `state.preset_index`, the `Preset` combo at the top of
+> the same panel, "the Quarter-Car preset".  These are **tunings**: a choice of
+> Q and R against one plant, not a choice of plant.  The surface says "Tunings"
+> for that reason, and the code says `LqrPreset` rather than `Preset`.  Reading
+> one for the other turns "the preset changed" into two different bug reports.
+
+| | Q on ball position / velocity | settles from 60 / -40 mm | what it shows |
+|---|---|---|---|
+| Detuned | 20 / 2 | 11.4 s | sluggish; never goes near a travel limit |
+| Nominal | 100 / 10 | 1.8 s | the shipped default, unchanged |
+| Aggressive | 150 / 2 | 0.62 s | saturates the servos the whole way in |
+
+`R` is 1 in all three and the leg weights stay at 1, so exactly one thing
+varies.  Pricing the legs *higher* buys sluggishness the position weight
+already buys more legibly; pricing them lower buys a tuning that loses the ball
+— `R = 0.1` against the nominal `Q` throws it off on 8 of 72 kick directions.
+
+**`defaultLqrStateWeights` is defined as the Nominal preset**, not the other way
+round, so "Nominal is what the application opens on" is arithmetic rather than
+two sets of literals that have to keep agreeing.
+
+**They are an offer, not a mode.** The weights stay editable after a preset is
+chosen, and no preset is stored — `activePreset` asks the *weights* which one
+they are, every frame, and answers -1 the moment a slider moves.  A stored
+selection would go stale on the first drag and keep claiming a tuning the plant
+no longer has.
+
+> **"Aggressive" saturates; it does not overshoot.**
+> The ticket asked for "fast but overshooting", and that is not what this plant
+> does.  The servo travel limits bite before the ball ever reaches the
+> setpoint, so saturation *limits the approach* rather than producing an
+> overshoot — measured position overshoot past centre is under a millimetre at
+> every tuning that keeps the ball.  The surface says "saturates", and the
+> `saturated` and `clipped` badges in Plate Control are the honest thing to
+> point at.
+
+On the cascade the presets replace the **Reset weights** button that #16
+shipped: Nominal writes exactly what it wrote, and two controls doing one thing
+only raise the question of how they differ.  Off the cascade there are no
+presets to reset *to*, and the button is still there.
+
+What bounds the aggressive end is the **ball**, not the solver.  Since
+[#23](https://github.com/caliburn-engineering/caliburn/issues/23) the ball can
+leave the plate vertically, and a tuning that slams the legs moves the plate
+out from under it rather than tilting under it — see "Contact, and the two
+phases" for what an over-aggressive gain does to a ball it can no longer hold.
+`Q` on position at 300 settles faster still and then throws the ball clean off
+on a 0.43 m/s nudge.
+
+150 is the fastest tuning measured that is **no more fragile than the tuning
+the demo already ships**: at `kMaxNudgeSpeed`, the top of the Nudge slider,
+neither loses the ball in any of 24 directions.  Both do above it, which is a
+property of the plate rather than of the preset and is why the slider stops
+where it does.  Pinned by
+`test_aggressive_is_no_more_fragile_than_the_shipped_tuning`, so raising that
+ceiling fails a test rather than quietly invalidating this paragraph.
+
+Detuned interacts with attract mode harmlessly: it settles in 11.4 s against a
+4 s kick period, so kicks would pile up — but choosing a preset is a click, and
+attract mode stands down on the first click.
+
+Decided in [#19](https://github.com/caliburn-engineering/caliburn/issues/19).
+
 ### Leg command vs leg angle
 
 Two arrays, since the loop was closed.  `alpha_cmd_deg_` is what the sliders,

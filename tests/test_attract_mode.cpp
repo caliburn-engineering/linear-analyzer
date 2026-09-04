@@ -496,16 +496,20 @@ void test_the_shipped_tuning_hops_in_a_stated_fraction_of_directions() {
     ASSERT_TRUE(worst_hop < 0.030);
 }
 
-// A tuning that saturates the servos still recovers.  Q at 200 is aggressive
-// enough to hit the travel limits and still bring the ball home, which is what
-// makes saturation a bounded cost rather than a failure.
-void test_a_saturating_tuning_still_recovers() {
+// The Aggressive preset (#19), against the disturbance the demo itself
+// offers.  It saturates the servos from every direction and still brings the
+// ball home from every direction, which is what makes saturation a bounded
+// cost rather than a failure — and what makes it honest to put the tuning
+// behind a button a visitor is invited to press.
+//
+// `sweepOneDirection` asserts the ball stays on the plate and comes home, so
+// the loop body is the whole test.  180 directions, not the handful a schedule
+// would reach: a preset that fails in one direction is a preset that fails.
+void test_the_aggressive_preset_recovers_from_every_direction() {
     const auto models = getBuiltinModels();
     const auto& e = cascadeModel(models);
 
-    Eigen::VectorXd q(7);
-    q << 1, 1, 1, 200, 200, 2, 2;
-    const Eigen::MatrixXd K = gainFor(e, q, defaultLqrInputWeights(3));
+    const Eigen::MatrixXd K = gainForPreset(e, presetNamed("Aggressive"));
 
     for (int i = 0; i < 180; ++i)
         sweepOneDirection(e, K, Disturbance{}, i * M_PI / 90.0);
@@ -596,7 +600,7 @@ int main() {
     test_the_demo_tracks_its_circle();
     test_the_kick_is_rejected_from_every_direction();
     test_the_shipped_tuning_hops_in_a_stated_fraction_of_directions();
-    test_a_saturating_tuning_still_recovers();
+    test_the_aggressive_preset_recovers_from_every_direction();
     test_an_over_aggressive_tuning_throws_the_ball_off();
     test_ten_minutes_unattended_never_loses_the_ball();
     std::printf("test_attract_mode: all passed\n");

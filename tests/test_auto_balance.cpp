@@ -21,6 +21,8 @@
 #include "test_helpers.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 
 using namespace caliburn;
@@ -256,6 +258,8 @@ struct SimResult {
     double peak_radius;    // [m]
     double settle_time;    // [s] after which it never again left 5 mm; -1 = never
     double final_tilt_deg; // [deg] the larger of |roll| and |pitch| at the end
+    bool saturated;        // a leg command hit a travel limit at least once
+    bool clipped;          // ...or asked for a pose the mechanism cannot make
     bool left_plate;
 };
 
@@ -291,7 +295,7 @@ SimResult runClosedLoop(const ModelEntry& e,
     const double dt = 1.0 / 60.0;
     const int steps = static_cast<int>(duration / dt);
 
-    SimResult r{0.0, 0.0, -1.0, 0.0, false};
+    SimResult r{0.0, 0.0, -1.0, 0.0, false, false, false};
     for (int k = 0; k < steps; ++k) {
         const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
         Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
@@ -300,6 +304,8 @@ SimResult runClosedLoop(const ModelEntry& e,
             seen << land(0), land(1), 0.0, 0.0;
         }
         const LegCommand c = legCommand(tk, d, alpha, seen, x_sp, y_sp);
+        if (c.saturated) r.saturated = true;
+        if (c.clipped_to_workspace) r.clipped = true;
         std::array<double, 3> adot{};
         for (int i = 0; i < 3; ++i)
             adot[i] = (c.alpha_rad[i] - alpha[i]) / d.servo_tau;
@@ -466,6 +472,196 @@ void test_unit_weights_park_in_the_friction_dead_band() {
     ASSERT_NEAR(s.final_tilt_deg, std::atan(kBallFriction) / kDeg, 0.06);
 }
 
+// ---------------------------------------------------------------------------
+// Layer 3: the preset tunings (#19)
+// ---------------------------------------------------------------------------
+//
+// Three named tunings exist so that somebody who has never met a state
+// weighting matrix can still watch what controller design does.  That makes
+// every one of them a claim about the ball's behaviour, and the claims are
+// printed on screen next to the buttons — so they are asserted here rather
+// than re-judged by eye whenever the plant moves.
+
+SimResult runPreset(const LqrPreset& p) {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+    return runClosedLoop(e, gainForPreset(e, p), kDisplaced, 0.0, 0.0, 30.0);
+}
+
+/// The Nominal run, computed once: it is the yardstick every other preset is
+/// read against, and three tests want it.  `nominalPreset()` rather than
+/// `defaultGain`, which is the same matrix by the invariant the test below
+/// pins — going through the preset is what makes that a shared claim rather
+/// than a coincidence this file relies on.
+const SimResult& nominalRun() {
+    static const SimResult r = runPreset(nominalPreset());
+    return r;
+}
+
+// "Nominal is the tuning loaded at startup" — arithmetic, not a coincidence
+// two sets of literals have to keep agreeing about.  `defaultLqrStateWeights`
+// is DEFINED as the nominal preset, and this is the test that would notice if
+// somebody inverted that dependency again.
+void test_the_nominal_preset_is_the_startup_tuning() {
+    const Eigen::VectorXd q = presetStateWeights(nominalPreset(), 7);
+    const Eigen::VectorXd r = presetInputWeights(nominalPreset(), 3);
+    ASSERT_TRUE(q.isApprox(defaultLqrStateWeights(7)));
+    ASSERT_TRUE(r.isApprox(defaultLqrInputWeights(3)));
+
+    // And it is the middle button, so a visitor arriving at the panel is
+    // sitting on the preset the demo is already running — sluggish, shipped,
+    // saturating, in that order.  Compared by address: `nominalPreset()` hands
+    // back a reference INTO the table, and asserting that identity is what
+    // stops a fourth preset being inserted above it unnoticed.
+    ASSERT_TRUE(&lqrPresets()[1] == &nominalPreset());
+}
+
+// Only the ball's own weights vary between presets: the leg weights are not
+// what the contrast is about, and a visitor who watched two knobs move could
+// not say which one they had just seen the consequence of.
+void test_the_presets_differ_only_in_the_ball_weights() {
+    for (const auto& p : lqrPresets()) {
+        const Eigen::VectorXd q = presetStateWeights(p, 7);
+        ASSERT_NEAR(q(0), 1.0, 1e-12);
+        ASSERT_NEAR(q(1), 1.0, 1e-12);
+        ASSERT_NEAR(q(2), 1.0, 1e-12);
+        ASSERT_NEAR(q(3), q(4), 1e-12);
+        ASSERT_NEAR(q(5), q(6), 1e-12);
+        ASSERT_NEAR(presetInputWeights(p, 3)(0), 1.0, 1e-12);
+    }
+
+    // A plant that is not the cascade gets unit weights, exactly as the
+    // startup default does — the UI does not offer the presets for one, and
+    // this is what stops a preset meaning something arbitrary if it ever did.
+    ASSERT_TRUE(presetStateWeights(presetNamed("Aggressive"), 4)
+                    .isApprox(Eigen::VectorXd::Ones(4)));
+}
+
+// Which button is lit.  The presets are an offer rather than a mode, so the
+// answer is asked of the weights every frame rather than stored — and the
+// interesting half is that dragging any slider puts it back to "none", which
+// is the UI telling the truth about a tuning that is no longer a preset.
+void test_the_lit_button_follows_the_weights() {
+    const auto& presets = lqrPresets();
+    for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
+        ASSERT_EQ(activePreset(presetStateWeights(presets[i], 7),
+                               presetInputWeights(presets[i], 3)), i);
+    }
+
+    // Startup sits on Nominal, so a visitor arriving at the panel can see
+    // which of the three they are already watching.
+    ASSERT_EQ(activePreset(defaultLqrStateWeights(7), defaultLqrInputWeights(3)), 1);
+
+    // One slider moved is no longer a preset, and neither is a plant that is
+    // not the cascade — off it the three presets are the same unit weights,
+    // and reporting a match would only be reporting that they stopped
+    // differing.
+    Eigen::VectorXd q = defaultLqrStateWeights(7);
+    q(3) *= 1.1;
+    ASSERT_EQ(activePreset(q, defaultLqrInputWeights(3)), -1);
+    ASSERT_EQ(activePreset(defaultLqrStateWeights(7),
+                           Eigen::VectorXd::Constant(3, 5.0)), -1);
+    ASSERT_EQ(activePreset(Eigen::VectorXd::Ones(4), Eigen::VectorXd::Ones(2)), -1);
+}
+
+// The nominal run, as the yardstick the other two are read against.  Also the
+// half of the aggressive claim that cannot be made by the aggressive run
+// alone: "living against the servo stops" is only a contrast if the shipped
+// tuning does not.
+void test_the_nominal_preset_settles_without_touching_the_stops() {
+    const SimResult s = nominalRun();
+    ASSERT_TRUE(!s.left_plate);
+    ASSERT_TRUE(!s.saturated);
+    ASSERT_TRUE(s.settle_time > 1.5 && s.settle_time < 2.2);   // 1.80 measured
+    ASSERT_TRUE(s.final_radius < 0.005);
+}
+
+// "Detuned is recognisably poor without being unstable" — the ticket's own
+// words, and the two halves need separate assertions.  Poor: six times the
+// settling time, which is the difference between watching it arrive and
+// wondering whether it is moving.  Not unstable: it does arrive, to half a
+// millimetre, and it never goes near a travel limit doing it.
+void test_the_detuned_preset_is_sluggish_but_never_unstable() {
+    const SimResult s = runPreset(presetNamed("Detuned"));
+    const SimResult base = nominalRun();
+
+    ASSERT_TRUE(!s.left_plate);
+    ASSERT_TRUE(s.settle_time > 4.0 * base.settle_time);
+    ASSERT_TRUE(s.final_radius < 0.005);
+    ASSERT_TRUE(!s.saturated);
+    // The number the button's own blurb prints: 11 s, against nominal's 1.8.
+    ASSERT_TRUE(s.settle_time > 10.0 && s.settle_time < 13.0);
+    // It does not wander further out than nominal on the way — sluggish, not
+    // wild.  Both start 72.1 mm out and neither adds to it.
+    ASSERT_TRUE(s.peak_radius < base.peak_radius + 0.001);
+}
+
+// "Aggressive visibly overshoots OR saturates."  It saturates, and it is worth
+// being exact about why the first disjunct is not the one satisfied: on this
+// plant the travel limits bite before the ball ever gets past the setpoint, so
+// saturation LIMITS the approach rather than producing an overshoot.  Measured
+// position overshoot past centre is under a millimetre at every tuning that
+// keeps the ball, which is why the surface says "saturates" and not "overshoots".
+void test_the_aggressive_preset_is_fast_and_saturates() {
+    const SimResult s = runPreset(presetNamed("Aggressive"));
+    const SimResult base = nominalRun();
+
+    ASSERT_TRUE(!s.left_plate);
+    ASSERT_TRUE(s.saturated);                    // and nominal, above, does not
+    ASSERT_TRUE(s.settle_time < 0.5 * base.settle_time);
+    ASSERT_TRUE(s.final_radius < 0.005);
+    // The number the button's own blurb prints: 0.6 s.
+    ASSERT_TRUE(s.settle_time > 0.4 && s.settle_time < 0.8);
+    // CONTEXT.md points a visitor at BOTH badges in Plate Control, so both
+    // have to actually light up.  They are different facts: the legs stop at
+    // their travel limits, and separately the triple they were asked for has
+    // no assembly at all.
+    ASSERT_TRUE(s.clipped);
+}
+
+// Why the Aggressive preset is Q = 150 and not the 300 the ticket's own
+// comment proposed.  That comment predates #23, which let the ball leave the
+// plate: a tuning that slams the legs moves the plate out from under the ball
+// rather than tilting under it, and at 300 a nudge throws the ball clean off.
+//
+// The honest statement of where the line is drawn is a comparison, not an
+// absolute — Aggressive is offered because it is no more fragile than the
+// tuning the demo already ships, against the hardest shove the interface can
+// deliver.  Both DO lose the ball above `kMaxNudgeSpeed`; that is a property
+// of the plate, not of the preset, and is why the slider stops where it does.
+//
+// Pinned here rather than left as prose because prose does not fail when
+// somebody raises the slider's ceiling.  Twenty-four directions at the top of
+// the slider: a shove the loop cannot reject is one the demo must not offer,
+// wherever it points.
+void test_aggressive_is_no_more_fragile_than_the_shipped_tuning() {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+    const Eigen::MatrixXd agg = gainForPreset(e, presetNamed("Aggressive"));
+    const Eigen::MatrixXd nom = gainForPreset(e, nominalPreset());
+
+    for (int i = 0; i < 24; ++i) {
+        const double th = i * M_PI / 12.0;
+        const Eigen::Vector4d kick(0.0, 0.0,
+                                   kMaxNudgeSpeed * std::cos(th),
+                                   kMaxNudgeSpeed * std::sin(th));
+        ASSERT_TRUE(!runClosedLoop(e, nom, kick, 0.0, 0.0, 8.0).left_plate);
+        ASSERT_TRUE(!runClosedLoop(e, agg, kick, 0.0, 0.0, 8.0).left_plate);
+    }
+}
+
+// Whatever else a preset does, it has to leave a working demo behind: a
+// visitor who clicks one and walks away must not come back to a ball on the
+// floor.  Cheap to state, and the one property all three share.
+void test_every_preset_brings_the_ball_home() {
+    for (const auto& p : lqrPresets()) {
+        const SimResult s = runPreset(p);
+        ASSERT_TRUE(!s.left_plate);
+        ASSERT_TRUE(s.settle_time > 0.0);
+        ASSERT_TRUE(s.final_radius < 0.005);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -486,6 +682,14 @@ int main() {
     test_looser_weights_are_visibly_sluggish();
     test_poor_tuning_visibly_degrades();
     test_unit_weights_park_in_the_friction_dead_band();
+    test_the_nominal_preset_is_the_startup_tuning();
+    test_the_presets_differ_only_in_the_ball_weights();
+    test_the_lit_button_follows_the_weights();
+    test_the_nominal_preset_settles_without_touching_the_stops();
+    test_the_detuned_preset_is_sluggish_but_never_unstable();
+    test_the_aggressive_preset_is_fast_and_saturates();
+    test_aggressive_is_no_more_fragile_than_the_shipped_tuning();
+    test_every_preset_brings_the_ball_home();
     std::printf("test_auto_balance: all passed\n");
     return 0;
 }

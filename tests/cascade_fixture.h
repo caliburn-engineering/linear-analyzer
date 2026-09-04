@@ -25,6 +25,7 @@
 #include <Eigen/Core>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 namespace caliburn {
@@ -59,6 +60,24 @@ inline Eigen::MatrixXd gainFor(const ModelEntry& e,
                                      r.asDiagonal().toDenseMatrix());
     ASSERT_TRUE(res.success);
     return res.K;
+}
+
+/// The preset named `name`, or a failed test.  Shared for the same reason
+/// everything else in this file is: two test files that each look a preset up
+/// their own way are two test files that can come to disagree about which
+/// tuning they are measuring.  `test_attract_mode` used to reach for
+/// `lqrPresets().back()`, which silently tracks whatever is listed last.
+inline const LqrPreset& presetNamed(const char* name) {
+    for (const auto& p : lqrPresets())
+        if (std::string(p.name) == name) return p;
+    std::fprintf(stderr, "FAIL: no preset named %s\n", name);
+    std::exit(1);
+}
+
+/// A preset's gain against this plant.  The two weight vectors always travel
+/// together — a preset IS the pair — so they are handed over as one thing.
+inline Eigen::MatrixXd gainForPreset(const ModelEntry& e, const LqrPreset& p) {
+    return gainFor(e, presetStateWeights(p, 7), presetInputWeights(p, 3));
 }
 
 /// The gain the application actually opens on — the weights from
