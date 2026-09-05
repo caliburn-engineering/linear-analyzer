@@ -30,9 +30,13 @@ Eigen::Vector2d corner(int k, int n, double r) {
 /// Phase into [0, 1).  Callers are expected to hand one that already is, but a
 /// phase is a lap position and a lap position wraps, so this is the definition
 /// rather than a guard.
-double wrap01(double u) {
-    if (!std::isfinite(u)) return 0.0;
-    const double w = std::fmod(u, 1.0);
+///
+/// A non-finite phase cannot come out of `advancePhase`, but `pathPoint` is
+/// public and the polygon walk below casts to `int` — which is undefined for a
+/// NaN rather than merely wrong.  So it is stopped at the door.
+double wrap01(double phase) {
+    if (!std::isfinite(phase)) return 0.0;
+    const double w = std::fmod(phase, 1.0);
     return (w < 0.0) ? w + 1.0 : w;
 }
 
@@ -42,8 +46,8 @@ struct Along {
     double frac;   ///< 0..1 along that edge
 };
 
-Along along(double u, int n) {
-    const double travelled = wrap01(u) * n;          // edges travelled
+Along along(double phase, int n) {
+    const double travelled = wrap01(phase) * n;      // edges travelled
     const int edge = static_cast<int>(travelled) % n;
     return {edge, travelled - std::floor(travelled)};
 }
@@ -55,38 +59,47 @@ double advancePhase(double phase, double dt, double period_s) {
     return wrap01(phase + dt / period_s);
 }
 
-Eigen::Vector2d pathPoint(const SetpointPath& p, double u) {
+Eigen::Vector2d pathPoint(const SetpointPath& p, double phase) {
     switch (p.shape) {
         case PathShape::Fixed:
             return Eigen::Vector2d::Zero();
         case PathShape::Circle: {
-            const double a = 2.0 * M_PI * wrap01(u);
+            const double a = 2.0 * M_PI * wrap01(phase);
             return Eigen::Vector2d(p.radius_m * std::cos(a), p.radius_m * std::sin(a));
         }
         default: break;
     }
     const int n = corners(p.shape);
-    const Along a = along(u, n);
+    const Along a = along(phase, n);
     const Eigen::Vector2d from = corner(a.edge, n, p.radius_m);
     const Eigen::Vector2d to = corner(a.edge + 1, n, p.radius_m);
     return from + a.frac * (to - from);
 }
 
-Eigen::Vector2d pathVelocity(const SetpointPath& p, double u) {
+Eigen::Vector2d pathVelocity(const SetpointPath& p, double phase) {
     if (p.shape == PathShape::Fixed || p.period_s <= 0.0)
         return Eigen::Vector2d::Zero();
     if (p.shape == PathShape::Circle) {
-        const double a = 2.0 * M_PI * wrap01(u);
+        const double a = 2.0 * M_PI * wrap01(phase);
         const double w = 2.0 * M_PI / p.period_s;     // rad/s
         return Eigen::Vector2d(-p.radius_m * w * std::sin(a),
                                 p.radius_m * w * std::cos(a));
     }
     const int n = corners(p.shape);
-    const Along a = along(u, n);
+    const Along a = along(phase, n);
     const Eigen::Vector2d from = corner(a.edge, n, p.radius_m);
     const Eigen::Vector2d to = corner(a.edge + 1, n, p.radius_m);
     // One edge per period/n, covered at constant speed.
     return (to - from) * (n / p.period_s);
+}
+
+double clampPeriod(const SetpointPath& p, double asked_s) {
+    return std::max(asked_s, minPeriod(p));
+}
+
+PathStep stepPath(const SetpointPath& p, double phase, double dt) {
+    return {pathPoint(p, phase), pathVelocity(p, phase),
+            advancePhase(phase, dt, p.period_s)};
 }
 
 double pathLength(const SetpointPath& p) {

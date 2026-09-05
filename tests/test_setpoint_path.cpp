@@ -121,6 +121,13 @@ void test_the_degenerate_cases_behave() {
     p = shape(PathShape::Fixed);
     ASSERT_NEAR(pathPoint(p, 0.3).norm(), 0.0, 1e-15);
     ASSERT_NEAR(pathLength(p), 0.0, 1e-15);
+
+    // A non-finite phase cannot come out of `advancePhase`, but `pathPoint` is
+    // public and the polygon walk casts to `int` — undefined for a NaN rather
+    // than merely wrong.  It is stopped at the door, so this is a real branch
+    // and gets a real test.
+    for (PathShape s : {PathShape::Circle, PathShape::Square, PathShape::Triangle})
+        ASSERT_TRUE(std::isfinite(pathPoint(shape(s), NAN).norm()));
 }
 
 // ---------------------------------------------------------------------------
@@ -146,23 +153,22 @@ struct Run {
     void advance(double seconds) {
         const double dt = 1.0 / 60.0;
         for (int i = 0; i < static_cast<int>(seconds / dt); ++i)
-            phase = advancePhase(phase, dt, path.period_s);
+            phase = stepPath(path, phase, dt).next_phase;
     }
 
     Eigen::Vector2d point() const { return pathPoint(path, phase); }
     Eigen::Vector2d velocity() const { return pathVelocity(path, phase); }
 
-    /// The lap slider.  Clamped to the floor, as the slider is.
-    void setLap(double period_s) {
-        path.period_s = std::max(period_s, minPeriod(path));
-    }
+    /// The lap slider.  Held off the floor by `clampPeriod`, which is the
+    /// panel's own rule rather than a copy of it — see `setpoint_path.h`.
+    void setLap(double period_s) { path.period_s = clampPeriod(path, period_s); }
 
     /// The size slider — which moves the lap floor with it, and so was the
     /// second way into the same bug: raising the radius raises the floor,
     /// which pushes the lap up, which was a change of `period_s`.
     void setSize(double radius_m) {
         path.radius_m = radius_m;
-        path.period_s = std::max(path.period_s, minPeriod(path));
+        path.period_s = clampPeriod(path, path.period_s);
     }
 };
 
@@ -195,18 +201,23 @@ void test_changing_the_lap_leaves_the_setpoint_where_it_is() {
 // The setpoint really was just asked to travel at a different speed, and a
 // feedforward that ignored that would be feeding forward the old lap.
 void test_the_reference_velocity_steps_on_a_lap_change() {
-    Run r;
-    r.path = shape(PathShape::Circle, 0.12, 10.0);
-    r.advance(100.0);
+    // Every shape: the polygons' velocity is just as period-dependent as the
+    // circle's, and the position tests beside this one sweep all three.
+    for (PathShape s : {PathShape::Circle, PathShape::Square, PathShape::Triangle}) {
+        Run r;
+        r.path = shape(s, 0.12, 10.0);
+        r.advance(100.0);
 
-    const Eigen::Vector2d before = r.velocity();
-    r.setLap(5.0);
-    const Eigen::Vector2d after = r.velocity();
+        const Eigen::Vector2d before = r.velocity();
+        r.setLap(5.0);                      // above every shape's floor at 120 mm
+        const Eigen::Vector2d after = r.velocity();
+        ASSERT_NEAR(r.path.period_s, 5.0, 1e-12);
 
-    // Same direction — the setpoint has not turned, it has sped up.
-    ASSERT_NEAR(before.normalized().dot(after.normalized()), 1.0, 1e-12);
-    // Twice the lap rate, twice the speed.
-    ASSERT_NEAR(after.norm(), 2.0 * before.norm(), 1e-12);
+        // Same direction — the setpoint has not turned, it has sped up.
+        ASSERT_NEAR(before.normalized().dot(after.normalized()), 1.0, 1e-12);
+        // Twice the lap rate, twice the speed.
+        ASSERT_NEAR(after.norm(), 2.0 * before.norm(), 1e-12);
+    }
 }
 
 // The size slider slides the setpoint radially and does not rotate it: same
@@ -250,7 +261,8 @@ void test_a_lap_change_takes_effect_from_that_moment() {
     r.setLap(5.0);
     r.advance(1.0);
     // One second at a five-second lap is a fifth of a lap, not a tenth.
-    const double moved = advancePhase(r.phase - at_change, 0.0, 1.0);
+    double moved = r.phase - at_change;
+    if (moved < 0.0) moved += 1.0;          // the lap wrapped in between
     ASSERT_NEAR(moved, 0.2, 1e-9);
 }
 

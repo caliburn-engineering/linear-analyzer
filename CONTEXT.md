@@ -643,7 +643,13 @@ indirectly — a bigger path raises the lap floor, which pushes `period_s` up.
 
 Accumulating instead means a lap change alters only the **rate**, from that
 moment on, and a size change slides the setpoint **radially**: same angle,
-bigger shape.  The reference *velocity* still steps on a lap change, which is
+bigger shape.  Two rules go with it, and both live in `setpoint_path.h` rather
+than in the panel so that the tests exercise them rather than their own copies:
+`stepPath` owns the **order** — read the setpoint at the phase the frame opened
+on, advance afterwards, so the position and the velocity handed to the loop are
+the same instant and a polygon cannot straddle a corner between them — and
+`clampPeriod` owns the **lap floor**, applied against the radius just dragged
+rather than the one the last frame copied.  The reference *velocity* still steps on a lap change, which is
 correct — the setpoint really was asked to travel faster — and
 `test_setpoint_path` says so alongside the invariance.  All eight of that
 file's original tests evaluated the path at fixed parameters, which is exactly
@@ -669,6 +675,14 @@ hide once already, in #23.  So `legCommand` takes a reference *state* — where
 the ball should be and how fast the setpoint is going — and there is one
 implementation, in the file whose header describes the contract.
 
+One thing deliberately left duplicated: **when** the reference velocity applies.
+`plate_view` and both closed-loop harnesses each carry the same one-line rule —
+zero it while the ball is airborne, because the plate cannot touch the ball and
+`seen` is already the predicted landing point.  Collapsing it would mean either
+`auto_balance` including `setpoint_path` or the reverse, and a loop that knows
+about paths is a worse trade than a rule stated three times and documented once,
+on `BallReference`.
+
 **It has no gain of its own, and must not be given one.**  The reference
 velocity is multiplied by K's velocity columns, which LQR designs from the
 `x' ball` and `y' ball` weights — so the two sliders that own those numbers
@@ -678,9 +692,18 @@ K owns.  `test_auto_balance` pins both halves: that the reference velocity
 enters as a velocity error, and that raising those two weights raises the
 command a moving setpoint asks for.
 
-The corner survives that: a square is tracked to 14.2 mm at its corners against
-a circle's 5.1 mm on the same size and lap.  That is a bandwidth limit made
-visible, and it is the point of offering cornered shapes at all.
+The corner survives that: a square is tracked to about 14 mm at its corners
+against a circle's 5.1 mm on the same size and lap — roughly three times.  That
+is a bandwidth limit made visible, and it is the point of offering cornered
+shapes at all.
+
+**Three times is the claim; the square's own figure is not.**  It is a peak
+sampled at 60 Hz exactly where the reference velocity steps, so which frame
+lands nearest the corner decides it: a phase perturbation in the last bit of a
+double moves it between 14.2 and 14.9 mm, while the circle's 5.072 mm holds to
+a thousandth across the same change.  `test_trajectory` asserts the ratio for
+that reason, and a fourth significant figure on the square would be a claim
+about frame alignment rather than about the controller.
 
 Decided in [#24](https://github.com/caliburn-engineering/caliburn/issues/24).
 

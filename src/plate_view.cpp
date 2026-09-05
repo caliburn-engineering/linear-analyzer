@@ -282,18 +282,19 @@ void PlateView::step(GLFWwindow* window, float dt) {
     // Driven before the loop reads it, so the gain sees this frame's target
     // rather than last frame's.
     //
-    // Evaluated at the phase this frame opened on, and advanced afterwards, so
-    // that the setpoint and the reference velocity handed to the loop below
-    // are the same instant.  On a polygon they would otherwise straddle a
-    // corner and disagree about which edge the setpoint is on.
-    const double phase = path_phase_;
+    // `stepPath` owns the order — the setpoint is read at the phase this frame
+    // opened on and the phase advances afterwards, so that the position here
+    // and the velocity handed to the loop below are the same instant.  Kept
+    // there rather than here so that the tests exercise this rule rather than
+    // their own copy of it.
+    PathStep path_step{};
     if (path_.shape != PathShape::Fixed) {
         path_.radius_m = path_radius_mm_ * 1e-3;
         path_.period_s = path_period_s_;
-        const Eigen::Vector2d sp = pathPoint(path_, phase);
-        sp_x_mm_ = static_cast<float>(sp(0) * 1000.0);
-        sp_y_mm_ = static_cast<float>(sp(1) * 1000.0);
-        path_phase_ = advancePhase(phase, dt, path_.period_s);
+        path_step = stepPath(path_, path_phase_, dt);
+        sp_x_mm_ = static_cast<float>(path_step.point(0) * 1000.0);
+        sp_y_mm_ = static_cast<float>(path_step.point(1) * 1000.0);
+        path_phase_ = path_step.next_phase;
     }
 
     if (loopDriving()) {
@@ -318,11 +319,12 @@ void PlateView::step(GLFWwindow* window, float dt) {
             // the ball's own velocity is what carries it to that landing
             // point, and asking the plate to match the path's speed as well
             // would be asking it to cancel a motion already accounted for.
-        } else if (path_.shape != PathShape::Fixed) {
+        } else {
             // The path's own velocity, handed to the loop as the velocity the
-            // setpoint has.  `BallReference` and `test_trajectory` carry what
+            // setpoint has — zero under a fixed setpoint, which is what
+            // `stepPath` already returns for one.  `BallReference` carries what
             // it buys and why it has no gain of its own.
-            ref.velocity = pathVelocity(path_, phase);
+            ref.velocity = path_step.velocity;
         }
         const LegCommand c = legCommand(tk_, design_, alpha_rad, seen, ref);
         balance_saturated_ = c.saturated;
@@ -689,7 +691,7 @@ void PlateView::drawBalanceControls() {
         path_.radius_m = path_radius_mm_ * 1e-3;
         const float lap_min = static_cast<float>(minPeriod(path_));
         ImGui::SliderFloat("lap [s]", &path_period_s_, lap_min, 30.0f, "%.1f");
-        path_period_s_ = std::max(path_period_s_, lap_min);
+        path_period_s_ = static_cast<float>(clampPeriod(path_, path_period_s_));
         ImGui::TextDisabled("setpoint speed %.0f mm/s (max %.0f)",
                             pathLength(path_) / std::max(0.1, path_.period_s) * 1000.0,
                             kMaxSetpointSpeed * 1000.0);

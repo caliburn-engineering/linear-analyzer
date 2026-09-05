@@ -79,7 +79,7 @@ double minPeriod(const SetpointPath& p);
 /// A degenerate period does not advance rather than dividing by zero.
 double advancePhase(double phase, double dt, double period_s);
 
-/// Where the setpoint is at phase `u`.
+/// Where the setpoint is at `phase`.
 ///
 /// The polygons are traversed at constant SPEED, not constant angle: a corner
 /// is a change of direction, and slowing into it would hide exactly the
@@ -88,9 +88,9 @@ double advancePhase(double phase, double dt, double period_s);
 /// Linear in `radius_m` for every shape, which is what makes the size slider
 /// safe to drag: the setpoint slides straight out along the ray it was already
 /// on, same angle, bigger shape.
-Eigen::Vector2d pathPoint(const SetpointPath& p, double u);
+Eigen::Vector2d pathPoint(const SetpointPath& p, double phase);
 
-/// How fast the setpoint is moving at phase `u`, and where it is going.
+/// How fast the setpoint is moving at `phase`, and where it is going.
 ///
 /// The one place `period_s` still enters directly, because it must: the phase
 /// says WHERE round the lap, and the period says how fast that is being
@@ -102,7 +102,44 @@ Eigen::Vector2d pathPoint(const SetpointPath& p, double u);
 /// genuinely discontinuous; the value returned there is the edge being left.
 /// That is honest — a corner IS a step in the reference velocity, and it is
 /// the reason the ball rounds one.
-Eigen::Vector2d pathVelocity(const SetpointPath& p, double u);
+Eigen::Vector2d pathVelocity(const SetpointPath& p, double phase);
+
+/// The lap time the panel actually holds, whatever the slider asked for.
+///
+/// The floor moves with the size — see `minPeriod` — so this has to be applied
+/// against the radius just dragged rather than the one the last frame copied.
+/// The frame where those differ is exactly the frame a just-enlarged path would
+/// keep the smaller path's floor and run at a speed the bound exists to forbid.
+///
+/// Here rather than beside the slider so that the rule has one implementation.
+/// A test harness that re-derives the panel's own clamp is testing its own copy
+/// of it, which is the shape of the duplication #23 was bitten by.
+double clampPeriod(const SetpointPath& p, double asked_s);
+
+/// One frame of a setpoint being driven round a path.
+///
+/// Zeroed by default, and that is load-bearing rather than tidiness: Eigen's
+/// default constructor leaves a fixed-size vector UNINITIALISED, so a
+/// `PathStep{}` standing in for "no path is driving this frame" would otherwise
+/// hand the loop a reference velocity of whatever was on the stack.
+struct PathStep {
+    Eigen::Vector2d point{Eigen::Vector2d::Zero()};      ///< [m] this frame
+    Eigen::Vector2d velocity{Eigen::Vector2d::Zero()};   ///< [m/s] this frame
+    double next_phase = 0.0;                             ///< for the next one
+};
+
+/// Read the setpoint, then advance the phase — in that order, which IS the rule.
+///
+/// Both halves are returned together because separating them is how they come
+/// to disagree: the position and the velocity handed to the loop have to be the
+/// same instant, and on a polygon a phase advanced in between would straddle a
+/// corner and answer with the wrong edge.  Returning `next_phase` rather than
+/// mutating keeps the caller's phase the frame-open one for as long as the
+/// frame needs it.
+///
+/// `dt` is the frame the setpoint is about to be held for, so a `Fixed` path
+/// still returns a zero point and a phase that does not move.
+PathStep stepPath(const SetpointPath& p, double phase, double dt);
 
 /// The path's total length, for drawing it and for reasoning about speed.
 double pathLength(const SetpointPath& p);

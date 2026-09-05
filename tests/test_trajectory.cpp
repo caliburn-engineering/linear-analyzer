@@ -65,16 +65,17 @@ Track follow(const ModelEntry& e, const Eigen::MatrixXd& K,
 
     const double dt = 1.0 / 60.0;
     Track r;
-    // Phase accumulated exactly as `plate_view` accumulates it — see #24.  The
-    // lap does not change inside a run here, so this is `t / period_s`; the
-    // point is that the harness has the same shape as the application.
     double t = 0.0, phase = 0.0, sum = 0.0;
     int n = 0;
     for (int k = 0; k < static_cast<int>(duration / dt); ++k) {
-        t += dt;
-        phase = advancePhase(phase, dt, path.period_s);
-        const Eigen::Vector2d sp = pathPoint(path, phase);
-        const Eigen::Vector2d spv = pathVelocity(path, phase);
+        // `stepPath`, which is what the application calls and in the order it
+        // calls it: read at the phase the frame opened on, advance afterwards.
+        // Not re-derived here — a harness that recomputes the thing it is
+        // measuring stops being evidence about the application.
+        const PathStep step = stepPath(path, phase, dt);
+        const Eigen::Vector2d sp = step.point;
+        const Eigen::Vector2d spv = step.velocity;
+        phase = step.next_phase;
 
         const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
         Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
@@ -95,6 +96,7 @@ Track follow(const ModelEntry& e, const Eigen::MatrixXd& K,
         pm_prev = pm;
         pm = plateMotion(tk, pose, alpha, adot);
         ball = stepBallContact(dynamics, ball, pm, pm_prev, pose, kBallRadius, g, dt);
+        t += dt;
 
         const Eigen::Matrix<double, 6, 1> now = plateFrame(ball, pm, kBallRadius);
         r.max_radius = std::max(r.max_radius, std::hypot(now(0), now(1)));
@@ -199,6 +201,14 @@ void test_a_corner_is_harder_than_a_curve() {
     // The square's worst error is at its corners: measured 14.2 mm against the
     // circle's 5.1 mm, on the same size and the same lap time.  Nearly three
     // times, and it is the corner that does it.
+    //
+    // The assertion is a RATIO rather than either number, because the square's
+    // figure is a peak sampled at 60 Hz right where the reference velocity
+    // steps: which frame falls nearest the corner decides it, and a phase
+    // perturbation at the last bit of a double swings it between 14.2 and 14.9
+    // mm.  The circle's 5.072 mm is stable to a thousandth over the same
+    // change.  Three times is the claim; a fourth significant figure on the
+    // square would be a claim about frame alignment.
     ASSERT_TRUE(q.max_error > 2.0 * c.max_error);
 }
 

@@ -169,13 +169,13 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
 
     DemoRun r;
     double t = 0.0;
-    // Phase is accumulated exactly as `plate_view` accumulates it.  Nothing
-    // here changes the lap mid-run, so this is `t / period_s` — but deriving
-    // it from `t` is the shape of the bug #24 fixed, and a test harness that
-    // keeps the old shape stops being evidence about the application.
+    // The phase the application drives, through the function the application
+    // drives it with.  Deriving it from `t` is the shape of the bug #24 fixed,
+    // and a harness that keeps the old shape stops being evidence about this.
     double phase = 0.0;
     for (int k = 0; k < steps; ++k) {
-        const Eigen::Vector2d sp = pathPoint(path, phase);
+        const PathStep step = stepPath(path, phase, dt);
+        const Eigen::Vector2d sp = step.point;
 
         const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
         Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
@@ -189,8 +189,7 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
         // the predicted landing point.  Exactly what `plate_view` builds.
         BallReference ref;
         ref.position = sp;
-        if (!ball.airborne && path.shape != PathShape::Fixed)
-            ref.velocity = pathVelocity(path, phase);
+        if (!ball.airborne) ref.velocity = step.velocity;
 
         const double span = *std::max_element(alpha.begin(), alpha.end()) -
                             *std::min_element(alpha.begin(), alpha.end());
@@ -199,7 +198,7 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
 
         const LegCommand c = legCommand(tk, d, alpha, seen, ref);
         t += dt;
-        phase = advancePhase(phase, dt, path.period_s);
+        phase = step.next_phase;
         std::array<double, 3> adot{};
         for (int i = 0; i < 3; ++i)
             adot[i] = (c.alpha_rad[i] - alpha[i]) / d.servo_tau;
