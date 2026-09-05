@@ -33,7 +33,14 @@ struct Track {
 };
 
 /// PlateView::step's calls in PlateView::step's order, with the setpoint driven
-/// by a path and the loop given the path's velocity as feedforward.
+/// by a path and the loop given the path's velocity as its reference velocity.
+///
+/// `feedforward` chooses whether that velocity is SUPPLIED, and no longer how
+/// it is applied: the arithmetic lives in `legCommand`, where the application
+/// gets it from too.  This harness used to carry its own copy — a second
+/// implementation of the loop is what let a real bug hide once already (#23),
+/// and a harness that computes the thing it is meant to be measuring is not
+/// evidence about the application.
 Track follow(const ModelEntry& e, const Eigen::MatrixXd& K,
              const SetpointPath& path, bool feedforward, double duration) {
     const TableParams tp = cascadeMechanism(e.params);
@@ -74,11 +81,11 @@ Track follow(const ModelEntry& e, const Eigen::MatrixXd& K,
         if (ball.airborne) {
             const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
             seen << land(0), land(1), 0.0, 0.0;
-        } else if (feedforward) {
-            seen(2) -= spv(0);
-            seen(3) -= spv(1);
         }
-        const LegCommand c = legCommand(tk, d, alpha, seen, sp(0), sp(1));
+        BallReference ref;
+        ref.position = sp;
+        if (feedforward && !ball.airborne) ref.velocity = spv;
+        const LegCommand c = legCommand(tk, d, alpha, seen, ref);
         std::array<double, 3> adot{};
         for (int j = 0; j < 3; ++j)
             adot[j] = (c.alpha_rad[j] - alpha[j]) / d.servo_tau;
@@ -189,7 +196,7 @@ void test_a_corner_is_harder_than_a_curve() {
     const Track c = follow(e, K, circle, true, 20.0);
     const Track q = follow(e, K, square, true, 20.0);
     ASSERT_TRUE(!c.lost && !q.lost);
-    // The square's worst error is at its corners: measured 14.4 mm against the
+    // The square's worst error is at its corners: measured 14.2 mm against the
     // circle's 5.1 mm, on the same size and the same lap time.  Nearly three
     // times, and it is the corner that does it.
     ASSERT_TRUE(q.max_error > 2.0 * c.max_error);

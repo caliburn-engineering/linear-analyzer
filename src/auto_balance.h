@@ -77,13 +77,41 @@ struct LegCommand {
     bool clipped_to_workspace;
 };
 
+/// What the loop is asked to make the ball do: be somewhere, and be moving.
+///
+/// The position half is the setpoint the loop has always had.  The velocity
+/// half is the **reference velocity**, and it is zero for a setpoint being
+/// held — which is why the loop went so long without one.
+///
+/// A ball at rest anywhere on a flat plate is an equilibrium of this plant, so
+/// a STATIONARY reference state is reachable with zero leg deviation and the
+/// regulator tracks it with no feedforward at all.  That stops being true the
+/// moment the setpoint moves: `[.., x_sp, y_sp, 0, 0]` then claims the ball
+/// should be at the setpoint *and stationary*, which is false, and the loop
+/// spends its effort fighting the very motion it was asked for.  Measured on a
+/// 120 mm circle at a ten-second lap: **3.66 mm of mean error with the
+/// reference velocity supplied, 35.52 mm without** — nearly ten times.  See
+/// #24 and `setpoint_path.h`.
+///
+/// **It has no gain of its own, and must not be given one.**  It enters as a
+/// reference velocity and is multiplied by K's velocity columns, which LQR
+/// designs from the `x' ball` and `y' ball` weights — so it is already tunable,
+/// from the two sliders that own those numbers.  A separate feedforward gain
+/// would be a second opinion about a number K owns.
+struct BallReference {
+    Eigen::Vector2d position{Eigen::Vector2d::Zero()};   ///< [m], plate frame
+    Eigen::Vector2d velocity{Eigen::Vector2d::Zero()};   ///< [m/s], plate frame
+};
+
 /// The loop, evaluated once: u = -K(x - x_ref), commanded as `home + u`.
 ///
-/// `x_ref` is `[0, 0, 0, x_sp, y_sp, 0, 0]` — and it needs no feedforward
-/// term, because a ball at rest ANYWHERE on a flat plate is an equilibrium of
-/// this plant.  The reference state is reachable with zero leg deviation, so
-/// the regulator is already a tracker.  That is a property of the ball, not a
-/// convenience: it is why the setpoint is a position and never a velocity.
+/// `x_ref` is `[0, 0, 0, ref.position, ref.velocity]` — the whole reference
+/// state, assembled here rather than by the caller.  It lived in the caller
+/// once, as a bias on the *measurement* handed in, and the arithmetic was
+/// identical because only the difference enters `u = -K(x - x_ref)`.  The
+/// trouble was that the loop's own header then said it needed no feedforward
+/// while the application supplied one two files away, and the test harness
+/// carried a third copy.  See `BallReference` and #24.
 ///
 /// A gain of the wrong shape returns the home pose and no saturation, so a
 /// caller that forgets to check `gainFitsCascade` gets a flat plate rather
@@ -102,8 +130,7 @@ LegCommand legCommand(const TableKinematics& tk,
                       const AutoBalanceDesign& d,
                       const std::array<double, 3>& alpha_rad,
                       const Eigen::Vector4d& ball,
-                      double x_sp,
-                      double y_sp);
+                      const BallReference& ref);
 
 /// Pull `target` back toward `safe` until the mechanism can be assembled there.
 ///

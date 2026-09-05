@@ -117,7 +117,7 @@ void test_zero_error_commands_the_home_pose() {
     const std::array<double, 3> alpha = {kHome, kHome, kHome};
     const Eigen::Vector4d ball(0.07, -0.02, 0.0, 0.0);
 
-    const LegCommand c = legCommand(cascadeKinematics(), d, alpha, ball, 0.07, -0.02);
+    const LegCommand c = legCommand(cascadeKinematics(), d, alpha, ball, {{0.07, -0.02}});
     for (int i = 0; i < 3; ++i) ASSERT_NEAR(c.alpha_rad[i], kHome, 1e-12);
     ASSERT_TRUE(!c.saturated);
 }
@@ -132,7 +132,7 @@ void test_command_is_home_minus_k_error() {
     const std::array<double, 3> alpha = {kHome + 0.04, kHome, kHome};
     const Eigen::Vector4d ball(0.01, 0.02, 0.0, 0.0);
 
-    const LegCommand c = legCommand(cascadeKinematics(), d, alpha, ball, 0.0, 0.0);
+    const LegCommand c = legCommand(cascadeKinematics(), d, alpha, ball, {});
     ASSERT_NEAR(c.alpha_rad[0], kHome - 2.0 * 0.01, 1e-12);
     ASSERT_NEAR(c.alpha_rad[1], kHome + 3.0 * 0.02, 1e-12);
     ASSERT_NEAR(c.alpha_rad[2], kHome - 0.5 * 0.04, 1e-12);
@@ -148,12 +148,85 @@ void test_setpoint_moves_the_target() {
     const std::array<double, 3> alpha = {kHome, kHome, kHome};
 
     const LegCommand at = legCommand(cascadeKinematics(), d, alpha,
-                                     Eigen::Vector4d(0.05, 0, 0, 0), 0.05, 0.0);
+                                     Eigen::Vector4d(0.05, 0, 0, 0), {{0.05, 0.0}});
     ASSERT_NEAR(at.alpha_rad[0], kHome, 1e-12);
 
     const LegCommand off = legCommand(cascadeKinematics(), d, alpha,
-                                      Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
+                                      Eigen::Vector4d(0.05, 0, 0, 0), {});
     ASSERT_NEAR(off.alpha_rad[0], kHome - 0.05, 1e-12);
+}
+
+// The reference VELOCITY, which is the other half of the reference state and
+// the whole of the trajectory feedforward.  It enters exactly as the position
+// does — as a term of `x_ref`, differenced against the measurement — so a ball
+// moving at the speed the setpoint is moving at is a ball with no error to
+// answer, and the plate stays level.
+//
+// It lives here, in the loop, rather than in whoever is driving the setpoint.
+// It used to be applied by biasing the measurement handed in, two files away
+// in `plate_view`, with a third copy in `test_trajectory`; the arithmetic was
+// identical and the arrangement was not, because the loop's own header went on
+// saying it needed no feedforward.  See #24.
+void test_the_reference_velocity_enters_as_a_velocity_error() {
+    Eigen::MatrixXd K = Eigen::MatrixXd::Zero(3, 7);
+    K(0, 5) = 4.0;   // leg 0 reacts to the ball's x velocity
+    K(1, 6) = -2.0;  // leg 1 to its y velocity
+    const AutoBalanceDesign d = designWith(K);
+    const std::array<double, 3> alpha = {kHome, kHome, kHome};
+
+    // Ball running at the setpoint's own speed: no error, level plate.
+    BallReference ref;
+    ref.velocity = Eigen::Vector2d(0.08, -0.03);
+    const LegCommand with = legCommand(cascadeKinematics(), d, alpha,
+                                       Eigen::Vector4d(0, 0, 0.08, -0.03), ref);
+    for (int i = 0; i < 3; ++i) ASSERT_NEAR(with.alpha_rad[i], kHome, 1e-12);
+
+    // The same ball with a HELD setpoint is a ball the loop tries to stop.
+    const LegCommand without = legCommand(cascadeKinematics(), d, alpha,
+                                          Eigen::Vector4d(0, 0, 0.08, -0.03), {});
+    ASSERT_NEAR(without.alpha_rad[0], kHome - 4.0 * 0.08, 1e-12);
+    ASSERT_NEAR(without.alpha_rad[1], kHome + 2.0 * -0.03, 1e-12);
+}
+
+// What the tuning panel says about the feedforward, as arithmetic.
+//
+// The feedforward has no gain of its own: the reference velocity is multiplied
+// by K's velocity columns, and LQR designs those from the `x' ball` and
+// `y' ball` weights.  So those two sliders DO set how hard the loop chases a
+// moving setpoint, and the panel says so — which is a claim, and this is the
+// test under it.  Inventing a separate feedforward gain would be a second
+// opinion about a number K already owns.
+void test_the_ball_velocity_weights_set_the_feedforwards_strength() {
+    const auto models = getBuiltinModels();
+    const auto& e = cascadeModel(models);
+
+    Eigen::VectorXd q = defaultLqrStateWeights(7);
+    const Eigen::VectorXd r = defaultLqrInputWeights(3);
+    const Eigen::MatrixXd soft = gainFor(e, q, r);
+
+    q(5) = q(6) = 10.0 * q(5);          // the two sliders the panel names
+    const Eigen::MatrixXd hard = gainFor(e, q, r);
+
+    // Only the velocity columns are what the feedforward is multiplied by.
+    ASSERT_TRUE(hard.col(5).norm() > 2.0 * soft.col(5).norm());
+    ASSERT_TRUE(hard.col(6).norm() > 2.0 * soft.col(6).norm());
+
+    // And so the same moving setpoint asks the legs for more.
+    BallReference ref;
+    ref.velocity = Eigen::Vector2d(0.075, 0.0);   // the opening circle's speed
+    const std::array<double, 3> alpha = {kHome, kHome, kHome};
+    const Eigen::Vector4d still(0, 0, 0, 0);      // a ball not yet keeping up
+
+    AutoBalanceDesign ds = designWith(soft), dh = designWith(hard);
+    const LegCommand cs = legCommand(cascadeKinematics(), ds, alpha, still, ref);
+    const LegCommand ch = legCommand(cascadeKinematics(), dh, alpha, still, ref);
+
+    double span_s = 0.0, span_h = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        span_s = std::max(span_s, std::abs(cs.alpha_rad[i] - kHome));
+        span_h = std::max(span_h, std::abs(ch.alpha_rad[i] - kHome));
+    }
+    ASSERT_TRUE(span_h > span_s);
 }
 
 // Travel limits clamp; the workspace then clips.  Two stages, because they
@@ -168,7 +241,7 @@ void test_command_clamps_to_servo_travel_then_to_the_workspace() {
     const std::array<double, 3> alpha = {kHome, kHome, kHome};
 
     const LegCommand c = legCommand(cascadeKinematics(), d, alpha,
-                                    Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
+                                    Eigen::Vector4d(0.05, 0, 0, 0), {});
     ASSERT_TRUE(c.saturated);
     ASSERT_TRUE(c.clipped_to_workspace);
 
@@ -206,7 +279,7 @@ void test_a_reachable_clamp_is_left_on_the_stop() {
     const std::array<double, 3> alpha = {kHome, kHome, kHome};
 
     const LegCommand c = legCommand(cascadeKinematics(), d, alpha,
-                                    Eigen::Vector4d(0.05, 0, 0, 0), 0.0, 0.0);
+                                    Eigen::Vector4d(0.05, 0, 0, 0), {});
     ASSERT_TRUE(c.saturated);
     ASSERT_TRUE(!c.clipped_to_workspace);
     ASSERT_NEAR(c.alpha_rad[0], d.alpha_min_rad, 1e-12);
@@ -218,7 +291,7 @@ void test_wrong_shape_commands_the_home_pose() {
     const AutoBalanceDesign d = designWith(Eigen::MatrixXd::Ones(2, 3));
     const std::array<double, 3> alpha = {kHome + 0.2, kHome, kHome};
     const LegCommand c = legCommand(cascadeKinematics(), d, alpha,
-                                    Eigen::Vector4d(0.1, 0.1, 1, 1), 0, 0);
+                                    Eigen::Vector4d(0.1, 0.1, 1, 1), {});
     for (int i = 0; i < 3; ++i) ASSERT_NEAR(c.alpha_rad[i], kHome, 1e-12);
     ASSERT_TRUE(!c.saturated);
 }
@@ -303,7 +376,7 @@ SimResult runClosedLoop(const ModelEntry& e,
             const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
             seen << land(0), land(1), 0.0, 0.0;
         }
-        const LegCommand c = legCommand(tk, d, alpha, seen, x_sp, y_sp);
+        const LegCommand c = legCommand(tk, d, alpha, seen, {{x_sp, y_sp}});
         if (c.saturated) r.saturated = true;
         if (c.clipped_to_workspace) r.clipped = true;
         std::array<double, 3> adot{};
@@ -672,6 +745,8 @@ int main() {
     test_zero_error_commands_the_home_pose();
     test_command_is_home_minus_k_error();
     test_setpoint_moves_the_target();
+    test_the_reference_velocity_enters_as_a_velocity_error();
+    test_the_ball_velocity_weights_set_the_feedforwards_strength();
     test_command_clamps_to_servo_travel_then_to_the_workspace();
     test_a_reachable_clamp_is_left_on_the_stop();
     test_wrong_shape_commands_the_home_pose();

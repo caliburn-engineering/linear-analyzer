@@ -308,27 +308,23 @@ void PlateView::step(GLFWwindow* window, float dt) {
         const Eigen::Matrix<double, 6, 1> bp =
             plateFrame(ball_, plate_motion_, kBallRadius);
         Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
+        BallReference ref;
+        ref.position = Eigen::Vector2d(sp_x_mm_ * 1e-3, sp_y_mm_ * 1e-3);
         if (ball_.airborne) {
             const Eigen::Vector2d land =
                 predictedLanding(bp, kBallRadius, kGravity);
             seen << land(0), land(1), 0.0, 0.0;
+            // The reference velocity stays zero with it, for the same reason:
+            // the ball's own velocity is what carries it to that landing
+            // point, and asking the plate to match the path's speed as well
+            // would be asking it to cancel a motion already accounted for.
         } else if (path_.shape != PathShape::Fixed) {
-            // Velocity feedforward.  The reference state has always claimed
-            // the ball should be AT the setpoint and STATIONARY, which is
-            // false the moment the setpoint moves — so the loop spent its
-            // effort fighting the very motion it was asked for.  Subtracting
-            // the path's own velocity from the measured one is exactly the
-            // same arithmetic as putting it into `x_ref`, since only the
-            // difference enters `u = -K(x - x_ref)`.
-            //
-            // Measured, on a 120 mm circle at a ten-second lap: 3.6 mm of mean
-            // error with this, 35.5 mm without.  Ten times, for two lines.
-            const Eigen::Vector2d v = pathVelocity(path_, phase);
-            seen(2) -= v(0);
-            seen(3) -= v(1);
+            // The path's own velocity, handed to the loop as the velocity the
+            // setpoint has.  `BallReference` and `test_trajectory` carry what
+            // it buys and why it has no gain of its own.
+            ref.velocity = pathVelocity(path_, phase);
         }
-        const LegCommand c = legCommand(tk_, design_, alpha_rad, seen,
-                                        sp_x_mm_ * 1e-3, sp_y_mm_ * 1e-3);
+        const LegCommand c = legCommand(tk_, design_, alpha_rad, seen, ref);
         balance_saturated_ = c.saturated;
         balance_clipped_ = c.clipped_to_workspace;
         for (int i = 0; i < 3; ++i)
@@ -657,10 +653,11 @@ void PlateView::drawBalanceControls() {
         return;
     }
 
-    // A ball at rest anywhere on a flat plate is an equilibrium, so this
-    // setpoint needs no feedforward: it enters as a reference STATE and the
-    // regulator is already a tracker.  Bounded well inside the plate, since
-    // the edge is where the ball leaves.
+    // A ball at rest anywhere on a flat plate is an equilibrium, so a HELD
+    // setpoint needs no feedforward: it enters as a reference state that is
+    // reachable with the plate flat.  A moving one does need one, and gets it
+    // — see `BallReference`.  Bounded well inside the plate, since the edge is
+    // where the ball leaves.
     const float lim = static_cast<float>((tk_.params().R_table - 0.05) * 1000.0);
 
     // --- Trajectory ---

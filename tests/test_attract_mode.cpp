@@ -182,19 +182,22 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
         if (ball.airborne) {
             const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
             seen << land(0), land(1), 0.0, 0.0;
-        } else if (path.shape != PathShape::Fixed) {
-            // The velocity feedforward, exactly as `plate_view` applies it.
-            const Eigen::Vector2d v = pathVelocity(path, phase);
-            seen(2) -= v(0);
-            seen(3) -= v(1);
         }
+        // The reference the loop is given: the setpoint, and — while the ball
+        // is on the plate — the speed the setpoint is travelling at.  Zero in
+        // the air, where the plate cannot touch the ball and `seen` is already
+        // the predicted landing point.  Exactly what `plate_view` builds.
+        BallReference ref;
+        ref.position = sp;
+        if (!ball.airborne && path.shape != PathShape::Fixed)
+            ref.velocity = pathVelocity(path, phase);
 
         const double span = *std::max_element(alpha.begin(), alpha.end()) -
                             *std::min_element(alpha.begin(), alpha.end());
         r.trace.push_back({t, bp(0), bp(1), std::hypot(bp(0), bp(1)),
                            std::hypot(bp(0) - sp(0), bp(1) - sp(1)), span});
 
-        const LegCommand c = legCommand(tk, d, alpha, seen, sp(0), sp(1));
+        const LegCommand c = legCommand(tk, d, alpha, seen, ref);
         t += dt;
         phase = advancePhase(phase, dt, path.period_s);
         std::array<double, 3> adot{};
@@ -417,7 +420,7 @@ Sweep sweepOneDirection(const ModelEntry& e, const Eigen::MatrixXd& K,
             const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
             seen << land(0), land(1), 0.0, 0.0;
         }
-        const LegCommand c = legCommand(tk, d, alpha, seen, 0.0, 0.0);
+        const LegCommand c = legCommand(tk, d, alpha, seen, {});
         std::array<double, 3> adot{};
         for (int i = 0; i < 3; ++i)
             adot[i] = (c.alpha_rad[i] - alpha[i]) / d.servo_tau;
@@ -575,7 +578,7 @@ void test_an_over_aggressive_tuning_throws_the_ball_off() {
                 const Eigen::Vector2d land = predictedLanding(bp, kBallRadius, g);
                 seen << land(0), land(1), 0.0, 0.0;
             }
-            const LegCommand c = legCommand(tk, d, alpha, seen, 0.0, 0.0);
+            const LegCommand c = legCommand(tk, d, alpha, seen, {});
             std::array<double, 3> adot{};
             for (int j = 0; j < 3; ++j)
                 adot[j] = (c.alpha_rad[j] - alpha[j]) / d.servo_tau;

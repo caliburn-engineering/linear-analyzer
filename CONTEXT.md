@@ -252,6 +252,14 @@ Decided in [#16](https://github.com/caliburn-engineering/caliburn/issues/16).
 > equilibrium of this plant, so that setpoint enters as a reference state and
 > needs no feedforward at all: the regulator is already a tracker.
 
+That last sentence is true of a setpoint being **held**, and #24 made it worth
+saying so.  A moving setpoint is not an equilibrium, and `[.., x_sp, y_sp, 0, 0]`
+then claims the ball should be at the setpoint *and stationary* — so the
+reference state grew a velocity.  `legCommand` takes a `BallReference`: where
+the ball should be, and how fast the setpoint is travelling.  Zero velocity is
+the held case and is what every caller but the trajectory driver passes, which
+is why the loop went so long without one.
+
 ### Preset tunings
 
 Three named LQR tunings — **Detuned**, **Nominal**, **Aggressive** — in the
@@ -646,13 +654,31 @@ brief test would have passed against it.
 **Velocity feedforward, decided by measurement.**  The reference state has
 always claimed the ball should be at the setpoint *and stationary*, which is
 false the moment the setpoint moves — so the loop spent its effort fighting the
-motion it was asked for.  Subtracting the path's velocity from the measured one
-is the same arithmetic as putting it in `x_ref`, since only the difference
-enters `u = -K(x - x_ref)`.  Measured on a 120 mm circle at a ten-second lap:
-**3.66 mm of mean error with it, 35.52 mm without** — nearly ten times, for two
-lines.  Without it the ball does not follow the circle so much as sit inside it.
+motion it was asked for.  Measured on a 120 mm circle at a ten-second lap:
+**3.66 mm of mean error with it, 35.52 mm without** — nearly ten times.
+Without it the ball does not follow the circle so much as sit inside it.
 
-The corner survives that: a square is tracked to 14.4 mm at its corners against
+**It lives in the loop, as `BallReference`.**  It was applied for a while by
+biasing the *measurement* handed to `legCommand`, from `plate_view` — identical
+arithmetic, since only the difference enters `u = -K(x - x_ref)`, and cheaper
+to write.  What made it wrong was everything around it: `auto_balance.h` went
+on saying the regulator needs no feedforward while the application supplied one
+two files away, and `test_trajectory` carried a third copy of it.  A second
+implementation of the loop inside its own test harness is what let a real bug
+hide once already, in #23.  So `legCommand` takes a reference *state* — where
+the ball should be and how fast the setpoint is going — and there is one
+implementation, in the file whose header describes the contract.
+
+**It has no gain of its own, and must not be given one.**  The reference
+velocity is multiplied by K's velocity columns, which LQR designs from the
+`x' ball` and `y' ball` weights — so the two sliders that own those numbers
+already set how hard the loop chases a moving setpoint, and the LQR panel says
+so beneath them.  A feedforward slider would be a second opinion about a number
+K owns.  `test_auto_balance` pins both halves: that the reference velocity
+enters as a velocity error, and that raising those two weights raises the
+command a moving setpoint asks for.
+
+The corner survives that: a square is tracked to 14.2 mm at its corners against
 a circle's 5.1 mm on the same size and lap.  That is a bandwidth limit made
 visible, and it is the point of offering cornered shapes at all.
 

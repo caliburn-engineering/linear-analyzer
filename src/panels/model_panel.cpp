@@ -503,6 +503,24 @@ static void drawLqrDesigner(AppState& state, bool is_cascade) {
         }
     }
 
+    // What the last two sliders ALSO do, said where they are rather than left
+    // for a visitor to deduce.  The trajectory feedforward has no gain of its
+    // own — the path's velocity enters as a reference velocity and is
+    // multiplied by K's velocity columns, which LQR designs from exactly these
+    // two weights.  So the strength of the feedforward is set here, from
+    // controls that would otherwise say nothing about it, and the alternative
+    // — a feedforward slider — would be a second opinion about a number K
+    // already owns.  Asserted in `test_auto_balance`; see #24.
+    if (is_cascade) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("x' and y' also set how hard the loop chases a "
+                           "MOVING setpoint: a path's own velocity enters the "
+                           "reference and is multiplied by these columns of K. "
+                           "The trajectory feedforward has no separate gain.");
+        ImGui::PopStyleColor();
+    }
+
     ImGui::Spacing();
     ImGui::TextDisabled("R - how expensive each input is");
     for (int j = 0; j < m; ++j) {

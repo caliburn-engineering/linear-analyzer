@@ -69,9 +69,9 @@ SetpointPath openingPath();
 ///
 /// Both halves matter and for the same reason.  On the path, so the position
 /// error is zero; moving with it, so the velocity error is too — the reference
-/// state carries the path's own velocity (see `plate_view`'s feedforward), and
-/// a ball placed correctly but at rest would still hand the loop a 75 mm/s
-/// error to answer on the first frame.
+/// state carries the path's own velocity (see `BallReference` in
+/// `auto_balance.h`), and a ball placed correctly but at rest would still hand
+/// the loop a 75 mm/s error to answer on the first frame.
 ///
 /// The result is an opening frame the controller has nothing to do about,
 /// which is exactly what makes it look calm.

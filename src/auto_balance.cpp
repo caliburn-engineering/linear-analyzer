@@ -84,14 +84,19 @@ LegCommand legCommand(const TableKinematics& tk,
                       const AutoBalanceDesign& d,
                       const std::array<double, 3>& alpha_rad,
                       const Eigen::Vector4d& ball,
-                      double x_sp,
-                      double y_sp) {
+                      const BallReference& ref) {
     LegCommand out{{d.home_leg_rad, d.home_leg_rad, d.home_leg_rad}, false, false};
     if (!gainFitsCascade(d)) return out;
 
+    // The whole reference state: zero leg deviation, the setpoint, and the
+    // speed the setpoint is travelling at.  The last two slots are the
+    // velocity feedforward, and they are zero for a setpoint being held —
+    // which is the case the loop spent its whole life in before #24.
     Eigen::VectorXd x_ref = Eigen::VectorXd::Zero(kStates);
-    x_ref(3) = x_sp;
-    x_ref(4) = y_sp;
+    x_ref(3) = ref.position(0);
+    x_ref(4) = ref.position(1);
+    x_ref(5) = ref.velocity(0);
+    x_ref(6) = ref.velocity(1);
 
     const Eigen::VectorXd u =
         -d.K * (cascadeState(alpha_rad, d.home_leg_rad, ball) - x_ref);
