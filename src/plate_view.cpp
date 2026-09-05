@@ -242,6 +242,7 @@ void PlateView::resetAll() {
             s->data.clear();
     plot_state_.markers.clear();
     sim_time_ = 0.0f;
+    path_phase_ = 0.0;
     resetBall();
 }
 
@@ -280,12 +281,19 @@ void PlateView::step(GLFWwindow* window, float dt) {
     // --- The setpoint, where a path owns it ---
     // Driven before the loop reads it, so the gain sees this frame's target
     // rather than last frame's.
+    //
+    // Evaluated at the phase this frame opened on, and advanced afterwards, so
+    // that the setpoint and the reference velocity handed to the loop below
+    // are the same instant.  On a polygon they would otherwise straddle a
+    // corner and disagree about which edge the setpoint is on.
+    const double phase = path_phase_;
     if (path_.shape != PathShape::Fixed) {
         path_.radius_m = path_radius_mm_ * 1e-3;
         path_.period_s = path_period_s_;
-        const Eigen::Vector2d sp = pathPoint(path_, sim_time_);
+        const Eigen::Vector2d sp = pathPoint(path_, phase);
         sp_x_mm_ = static_cast<float>(sp(0) * 1000.0);
         sp_y_mm_ = static_cast<float>(sp(1) * 1000.0);
+        path_phase_ = advancePhase(phase, dt, path_.period_s);
     }
 
     if (loopDriving()) {
@@ -315,7 +323,7 @@ void PlateView::step(GLFWwindow* window, float dt) {
             //
             // Measured, on a 120 mm circle at a ten-second lap: 3.6 mm of mean
             // error with this, 35.5 mm without.  Ten times, for two lines.
-            const Eigen::Vector2d v = pathVelocity(path_, sim_time_);
+            const Eigen::Vector2d v = pathVelocity(path_, phase);
             seen(2) -= v(0);
             seen(3) -= v(1);
         }

@@ -146,6 +146,16 @@ private:
     float path_radius_mm_ = 120.0f;
     float path_period_s_ = 10.0f;
 
+    /// How far round the lap the setpoint is, in [0, 1), ACCUMULATED.
+    ///
+    /// Not derived from `sim_time_`, which is what it used to be and is the
+    /// bug: `t / period_s` moves by `t dT / T^2` when the lap slider moves, so
+    /// after 100 s a nudge from 10.0 to 9.5 s teleported the setpoint 170
+    /// degrees round the path and the loop dragged the ball across the plate
+    /// after it.  The size slider did it too, through the lap floor.  See
+    /// `advancePhase` and #24.
+    double path_phase_ = 0.0;
+
     // --- Camera ---
     OrbitCamera camera_;
     bool dragging_ = false;

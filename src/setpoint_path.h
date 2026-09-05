@@ -62,20 +62,47 @@ inline constexpr double kMinLapSeconds = 2.0;
 /// the big paths, and `kMinLapSeconds`, which binds on the small ones.
 double minPeriod(const SetpointPath& p);
 
-/// Where the setpoint is at time `t`.
+/// How far round the lap the setpoint is: 0 at the start, 1 back at the start.
+///
+/// **Phase, not time, and this is the whole of it.**  The setpoint used to be
+/// evaluated at `t / period_s`, which reads as a pure function of the clock
+/// and is not one: changing `period_s` moves that quantity by `t dT / T^2`,
+/// and `t` is the entire time the simulation has been running.  Measured, at
+/// 100 s, a lap change of 10.0 -> 9.5 s moved the setpoint **170 degrees** —
+/// so a nudge of the slider teleported the target across the plate and the
+/// loop hauled the ball after it.  The jump grew with run time and wrapped, so
+/// any nudge could land anywhere.
+///
+/// Accumulating the phase instead makes a lap change alter only the RATE from
+/// that moment on, which is what the slider says it does.  See #24.
+///
+/// A degenerate period does not advance rather than dividing by zero.
+double advancePhase(double phase, double dt, double period_s);
+
+/// Where the setpoint is at phase `u`.
 ///
 /// The polygons are traversed at constant SPEED, not constant angle: a corner
 /// is a change of direction, and slowing into it would hide exactly the
 /// behaviour the cornered shapes exist to show.
-Eigen::Vector2d pathPoint(const SetpointPath& p, double t);
+///
+/// Linear in `radius_m` for every shape, which is what makes the size slider
+/// safe to drag: the setpoint slides straight out along the ray it was already
+/// on, same angle, bigger shape.
+Eigen::Vector2d pathPoint(const SetpointPath& p, double u);
 
-/// How fast the setpoint is moving at time `t`, and where it is going.
+/// How fast the setpoint is moving at phase `u`, and where it is going.
+///
+/// The one place `period_s` still enters directly, because it must: the phase
+/// says WHERE round the lap, and the period says how fast that is being
+/// walked.  So the reference velocity DOES step when the lap slider moves,
+/// while the position does not — which is correct, and is exactly what the
+/// slider was asking for.
 ///
 /// Undefined for an instant at each corner, where the path's velocity is
 /// genuinely discontinuous; the value returned there is the edge being left.
 /// That is honest — a corner IS a step in the reference velocity, and it is
 /// the reason the ball rounds one.
-Eigen::Vector2d pathVelocity(const SetpointPath& p, double t);
+Eigen::Vector2d pathVelocity(const SetpointPath& p, double u);
 
 /// The path's total length, for drawing it and for reasoning about speed.
 double pathLength(const SetpointPath& p);

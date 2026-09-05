@@ -623,6 +623,26 @@ Polygons are traversed at constant **speed**, not constant angle: a corner is
 where the interesting behaviour is, and sweeping an angle would crawl through
 it.
 
+**Position on the path is a phase, and the phase is accumulated.**  `pathPoint`
+and `pathVelocity` take a lap fraction in `[0, 1)`; `plate_view` holds it and
+advances it by `dt / period_s` each step.  It used to be derived from the
+simulation clock as `t / period_s`, which reads as a pure function of time and
+is not one: changing the lap moves that quantity by `t dT / T^2`, and `t` is the
+whole time the demo has been running.  Measured at 100 s, a nudge of the lap
+slider from 10.0 to 9.5 s threw the setpoint **170 degrees** round the path, and
+the loop hauled the ball across the plate after it.  The size slider did it too,
+indirectly — a bigger path raises the lap floor, which pushes `period_s` up.
+
+Accumulating instead means a lap change alters only the **rate**, from that
+moment on, and a size change slides the setpoint **radially**: same angle,
+bigger shape.  The reference *velocity* still steps on a lap change, which is
+correct — the setpoint really was asked to travel faster — and
+`test_setpoint_path` says so alongside the invariance.  All eight of that
+file's original tests evaluated the path at fixed parameters, which is exactly
+why none of them saw this; the ones added with the fix move a slider mid-run,
+at four run lengths out to 1000 s, because the old error grew with `t` and a
+brief test would have passed against it.
+
 **Velocity feedforward, decided by measurement.**  The reference state has
 always claimed the ball should be at the setpoint *and stationary*, which is
 false the moment the setpoint moves — so the loop spent its effort fighting the

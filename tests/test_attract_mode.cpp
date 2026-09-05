@@ -169,8 +169,13 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
 
     DemoRun r;
     double t = 0.0;
+    // Phase is accumulated exactly as `plate_view` accumulates it.  Nothing
+    // here changes the lap mid-run, so this is `t / period_s` — but deriving
+    // it from `t` is the shape of the bug #24 fixed, and a test harness that
+    // keeps the old shape stops being evidence about the application.
+    double phase = 0.0;
     for (int k = 0; k < steps; ++k) {
-        const Eigen::Vector2d sp = pathPoint(path, t);
+        const Eigen::Vector2d sp = pathPoint(path, phase);
 
         const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
         Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));
@@ -179,7 +184,7 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
             seen << land(0), land(1), 0.0, 0.0;
         } else if (path.shape != PathShape::Fixed) {
             // The velocity feedforward, exactly as `plate_view` applies it.
-            const Eigen::Vector2d v = pathVelocity(path, t);
+            const Eigen::Vector2d v = pathVelocity(path, phase);
             seen(2) -= v(0);
             seen(3) -= v(1);
         }
@@ -191,6 +196,7 @@ DemoRun runDemo(const ModelEntry& e, const Eigen::MatrixXd& K,
 
         const LegCommand c = legCommand(tk, d, alpha, seen, sp(0), sp(1));
         t += dt;
+        phase = advancePhase(phase, dt, path.period_s);
         std::array<double, 3> adot{};
         for (int i = 0; i < 3; ++i)
             adot[i] = (c.alpha_rad[i] - alpha[i]) / d.servo_tau;

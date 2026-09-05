@@ -58,12 +58,16 @@ Track follow(const ModelEntry& e, const Eigen::MatrixXd& K,
 
     const double dt = 1.0 / 60.0;
     Track r;
-    double t = 0.0, sum = 0.0;
+    // Phase accumulated exactly as `plate_view` accumulates it — see #24.  The
+    // lap does not change inside a run here, so this is `t / period_s`; the
+    // point is that the harness has the same shape as the application.
+    double t = 0.0, phase = 0.0, sum = 0.0;
     int n = 0;
     for (int k = 0; k < static_cast<int>(duration / dt); ++k) {
         t += dt;
-        const Eigen::Vector2d sp = pathPoint(path, t);
-        const Eigen::Vector2d spv = pathVelocity(path, t);
+        phase = advancePhase(phase, dt, path.period_s);
+        const Eigen::Vector2d sp = pathPoint(path, phase);
+        const Eigen::Vector2d spv = pathVelocity(path, phase);
 
         const Eigen::Matrix<double, 6, 1> bp = plateFrame(ball, pm, kBallRadius);
         Eigen::Vector4d seen(bp(0), bp(1), bp(3), bp(4));

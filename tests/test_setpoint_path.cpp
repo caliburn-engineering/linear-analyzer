@@ -8,6 +8,7 @@
 
 #include "test_helpers.h"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace caliburn;
@@ -32,7 +33,7 @@ void test_every_path_closes() {
                 const SetpointPath p = shape(s, r, T);
                 for (int lap = 1; lap <= 4; ++lap) {
                     const Eigen::Vector2d a = pathPoint(p, 0.7);
-                    const Eigen::Vector2d b = pathPoint(p, 0.7 + lap * T);
+                    const Eigen::Vector2d b = pathPoint(p, 0.7 + lap);
                     ASSERT_NEAR((a - b).norm(), 0.0, 1e-12);
                 }
             }
@@ -45,10 +46,8 @@ void test_every_path_closes() {
 void test_no_path_leaves_its_radius() {
     for (PathShape s : {PathShape::Circle, PathShape::Square, PathShape::Triangle}) {
         const SetpointPath p = shape(s, 0.12);
-        for (int i = 0; i < 2000; ++i) {
-            const double t = 10.0 * i / 2000.0;
-            ASSERT_TRUE(pathPoint(p, t).norm() <= 0.12 + 1e-12);
-        }
+        for (int i = 0; i < 2000; ++i)
+            ASSERT_TRUE(pathPoint(p, i / 2000.0).norm() <= 0.12 + 1e-12);
     }
 }
 
@@ -59,7 +58,7 @@ void test_every_shape_reaches_its_radius() {
         const SetpointPath p = shape(s, 0.12);
         double furthest = 0.0;
         for (int i = 0; i < 2000; ++i)
-            furthest = std::max(furthest, pathPoint(p, 10.0 * i / 2000.0).norm());
+            furthest = std::max(furthest, pathPoint(p, i / 2000.0).norm());
         ASSERT_NEAR(furthest, 0.12, 1e-6);
     }
 }
@@ -72,23 +71,26 @@ void test_the_polygons_are_walked_at_constant_speed() {
         const SetpointPath p = shape(s, 0.12, 6.0);
         const double expect = pathLength(p) / p.period_s;
         for (int i = 0; i < 600; ++i) {
-            const double t = 6.0 * (i + 0.5) / 600.0;   // off the corners
-            ASSERT_NEAR(pathVelocity(p, t).norm(), expect, 1e-9);
+            const double u = (i + 0.5) / 600.0;         // off the corners
+            ASSERT_NEAR(pathVelocity(p, u).norm(), expect, 1e-9);
         }
     }
 }
 
-// The velocity is the position's derivative, which is the claim a feedforward
-// term would rest on.  Checked against a difference of the position, away from
-// the corners where the derivative genuinely does not exist.
+// The velocity is the position's derivative with respect to TIME, which is the
+// claim the feedforward rests on.  The position is a function of phase and the
+// phase advances at `1 / period_s`, so the chain rule is the thing being
+// checked: `dp/dt = (dp/du) / period_s`.  Away from the corners, where the
+// derivative genuinely does not exist.
 void test_velocity_is_the_derivative_of_position() {
     const double h = 1e-6;
     for (PathShape s : {PathShape::Circle, PathShape::Square, PathShape::Triangle}) {
         const SetpointPath p = shape(s, 0.12, 7.0);
         for (int i = 0; i < 200; ++i) {
-            const double t = 7.0 * (i + 0.5) / 200.0;
-            const Eigen::Vector2d fd = (pathPoint(p, t + h) - pathPoint(p, t - h)) / (2 * h);
-            ASSERT_TRUE((fd - pathVelocity(p, t)).norm() < 1e-4);
+            const double u = (i + 0.5) / 200.0;
+            const Eigen::Vector2d fd =
+                (pathPoint(p, u + h) - pathPoint(p, u - h)) / (2 * h * p.period_s);
+            ASSERT_TRUE((fd - pathVelocity(p, u)).norm() < 1e-4);
         }
     }
 }
@@ -98,9 +100,9 @@ void test_velocity_is_the_derivative_of_position() {
 // if the path ever stopped having corners the demo would lose its point.
 void test_a_corner_is_a_step_in_the_reference_velocity() {
     const SetpointPath p = shape(PathShape::Square, 0.12, 8.0);
-    const double corner_t = p.period_s / 4.0;      // end of the first edge
-    const Eigen::Vector2d before = pathVelocity(p, corner_t - 1e-4);
-    const Eigen::Vector2d after = pathVelocity(p, corner_t + 1e-4);
+    const double corner_u = 0.25;                  // end of the first edge
+    const Eigen::Vector2d before = pathVelocity(p, corner_u - 1e-5);
+    const Eigen::Vector2d after = pathVelocity(p, corner_u + 1e-5);
     // A square's corner turns the velocity through a right angle.
     ASSERT_NEAR(before.normalized().dot(after.normalized()), 0.0, 1e-6);
     ASSERT_NEAR(before.norm(), after.norm(), 1e-9);
@@ -111,12 +113,145 @@ void test_a_corner_is_a_step_in_the_reference_velocity() {
 // alone rather than dragging it to the origin every frame.
 void test_the_degenerate_cases_behave() {
     SetpointPath p = shape(PathShape::Circle, 0.12, 0.0);
-    ASSERT_TRUE(std::isfinite(pathPoint(p, 3.0).norm()));
-    ASSERT_NEAR(pathVelocity(p, 3.0).norm(), 0.0, 1e-15);
+    ASSERT_TRUE(std::isfinite(pathPoint(p, 0.3).norm()));
+    ASSERT_NEAR(pathVelocity(p, 0.3).norm(), 0.0, 1e-15);
+    // And a zero lap does not advance the phase either, rather than dividing.
+    ASSERT_NEAR(advancePhase(0.3, 1.0 / 60.0, 0.0), 0.3, 1e-15);
 
     p = shape(PathShape::Fixed);
-    ASSERT_NEAR(pathPoint(p, 3.0).norm(), 0.0, 1e-15);
+    ASSERT_NEAR(pathPoint(p, 0.3).norm(), 0.0, 1e-15);
     ASSERT_NEAR(pathLength(p), 0.0, 1e-15);
+}
+
+// ---------------------------------------------------------------------------
+// The sliders, mid-run (#24 round two)
+// ---------------------------------------------------------------------------
+//
+// The defect these exist for: the phase used to be `t / period_s`, derived
+// from the whole time the simulation had been running.  Changing the lap moved
+// it by `t dT / T^2`, so after 100 s a nudge from 10.0 to 9.5 s threw the
+// setpoint 170 degrees round the path and the loop hauled the ball clean
+// across the plate after it.  It grew with run time and it wrapped, so any
+// nudge could land anywhere.
+//
+// Every test in this file used to evaluate the path at fixed parameters, which
+// is exactly why not one of them saw it.  These change a slider mid-run.
+
+/// `plate_view`'s own arrangement: a path, an accumulated phase, and the two
+/// sliders applied the way the panel applies them.
+struct Run {
+    SetpointPath path;
+    double phase = 0.0;
+
+    void advance(double seconds) {
+        const double dt = 1.0 / 60.0;
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i)
+            phase = advancePhase(phase, dt, path.period_s);
+    }
+
+    Eigen::Vector2d point() const { return pathPoint(path, phase); }
+    Eigen::Vector2d velocity() const { return pathVelocity(path, phase); }
+
+    /// The lap slider.  Clamped to the floor, as the slider is.
+    void setLap(double period_s) {
+        path.period_s = std::max(period_s, minPeriod(path));
+    }
+
+    /// The size slider — which moves the lap floor with it, and so was the
+    /// second way into the same bug: raising the radius raises the floor,
+    /// which pushes the lap up, which was a change of `period_s`.
+    void setSize(double radius_m) {
+        path.radius_m = radius_m;
+        path.period_s = std::max(path.period_s, minPeriod(path));
+    }
+};
+
+// The lap slider changes the RATE and nothing else.  Not approximately —
+// exactly: the phase is a number the slider does not touch.
+void test_changing_the_lap_leaves_the_setpoint_where_it_is() {
+    for (PathShape s : {PathShape::Circle, PathShape::Square, PathShape::Triangle}) {
+        // Deliberately at four run lengths spanning four orders of magnitude.
+        // The old failure was proportional to `t`, so a test that only ever
+        // ran for a second would have passed against the bug.
+        for (double run_s : {0.5, 10.0, 100.0, 1000.0}) {
+            Run r;
+            r.path = shape(s, 0.12, 10.0);
+            r.advance(run_s);
+
+            const Eigen::Vector2d before = r.point();
+            r.setLap(9.5);
+            const Eigen::Vector2d after = r.point();
+            ASSERT_NEAR((after - before).norm(), 0.0, 1e-15);
+
+            // And again the other way, and by a lot rather than a nudge.
+            const Eigen::Vector2d before_2 = r.point();
+            r.setLap(30.0);
+            ASSERT_NEAR((r.point() - before_2).norm(), 0.0, 1e-15);
+        }
+    }
+}
+
+// The reference velocity, on the other hand, IS allowed to step — and must.
+// The setpoint really was just asked to travel at a different speed, and a
+// feedforward that ignored that would be feeding forward the old lap.
+void test_the_reference_velocity_steps_on_a_lap_change() {
+    Run r;
+    r.path = shape(PathShape::Circle, 0.12, 10.0);
+    r.advance(100.0);
+
+    const Eigen::Vector2d before = r.velocity();
+    r.setLap(5.0);
+    const Eigen::Vector2d after = r.velocity();
+
+    // Same direction — the setpoint has not turned, it has sped up.
+    ASSERT_NEAR(before.normalized().dot(after.normalized()), 1.0, 1e-12);
+    // Twice the lap rate, twice the speed.
+    ASSERT_NEAR(after.norm(), 2.0 * before.norm(), 1e-12);
+}
+
+// The size slider slides the setpoint radially and does not rotate it: same
+// angle, longer radius, which is the same point on a bigger shape.  Checked
+// both ways round the floor — growing a path pushes the lap up with it, and
+// that indirect change of `period_s` was the second route into the bug.
+void test_changing_the_size_moves_the_setpoint_radially_only() {
+    for (PathShape s : {PathShape::Circle, PathShape::Square, PathShape::Triangle}) {
+        for (double run_s : {0.5, 100.0, 1000.0}) {
+            Run r;
+            r.path = shape(s, 0.02, 10.0);
+            r.setLap(minPeriod(r.path));          // sitting on the floor
+            r.advance(run_s);
+
+            const Eigen::Vector2d before = r.point();
+            const double lap_before = r.path.period_s;
+
+            r.setSize(kMaxPathRadius);            // 20 mm -> 180 mm, floor moves
+            const Eigen::Vector2d after = r.point();
+
+            // The floor really did move, or this test is not exercising the
+            // indirect route it exists for.
+            ASSERT_TRUE(r.path.period_s > lap_before);
+
+            // Same ray from the centre, and the growth is the ratio asked for.
+            ASSERT_TRUE(before.norm() > 1e-9 && after.norm() > 1e-9);
+            ASSERT_NEAR(before.normalized().dot(after.normalized()), 1.0, 1e-12);
+            ASSERT_NEAR(after.norm() / before.norm(), kMaxPathRadius / 0.02, 1e-9);
+        }
+    }
+}
+
+// And the rate the phase advances at is the lap time, from the moment the
+// slider moved — which is the whole of what the slider is entitled to do.
+void test_a_lap_change_takes_effect_from_that_moment() {
+    Run r;
+    r.path = shape(PathShape::Circle, 0.12, 10.0);
+    r.advance(100.0);
+    const double at_change = r.phase;
+
+    r.setLap(5.0);
+    r.advance(1.0);
+    // One second at a five-second lap is a fifth of a lap, not a tenth.
+    const double moved = advancePhase(r.phase - at_change, 0.0, 1.0);
+    ASSERT_NEAR(moved, 0.2, 1e-9);
 }
 
 // Drawing: a polygon is drawn by its corners, a circle by samples.  A square
@@ -148,6 +283,10 @@ int main() {
     test_velocity_is_the_derivative_of_position();
     test_a_corner_is_a_step_in_the_reference_velocity();
     test_the_degenerate_cases_behave();
+    test_changing_the_lap_leaves_the_setpoint_where_it_is();
+    test_the_reference_velocity_steps_on_a_lap_change();
+    test_changing_the_size_moves_the_setpoint_radially_only();
+    test_a_lap_change_takes_effect_from_that_moment();
     test_the_outline_is_drawable();
     std::printf("test_setpoint_path: all passed\n");
     return 0;
